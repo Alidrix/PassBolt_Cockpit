@@ -1,0 +1,161 @@
+# 📈 The Trend Scope
+
+Une application personnelle pour détecter les vidéos **les plus virales** sur YouTube (FR/US/ES), avec filtrage thématique, statistiques évolutives, notifications et tableau de bord analytique. Développée pour un usage local sécurisé : frontend ultra-rapide (vanilla JS responsive), backend Node.js minimaliste (prêt à évoluer vers Rust si besoin), et base Supabase.
+
+---
+
+## 🚀 Objectifs
+
+| Fonction                   | Détail |
+|----------------------------|--------|
+| 🔍 Détection virale       | Repère les vidéos avec la vélocité la plus forte (vues/h). |
+| 🎯 Ciblage intelligent    | Classement par **catégories** (nourriture, voiture, etc.) et **langues** (FR/US/ES). |
+| 🕹️ Rafraîchissement manuel | Pas de timing fixe, l’utilisateur contrôle les actualisations. |
+| 🧠 Historique enrichi     | Affiche les stats d’évolution (vues/likes) et permet d’ajouter des **notes personnelles**. |
+| 🔔 Alertes & notifications | Centre de notifications interne avec déclenchement configurable. |
+| 🛡️ Authentification forte | Accès par **login, mot de passe sécurisé (16+ caractères)**. |
+| 📦 Intégration Supabase   | Stockage des vidéos, notes, historiques, utilisateurs via **Supabase**. |
+| 🧱 Structure scalable      | Prêt à être hébergé publiquement après phase de validation. |
+| 🎯 Ciblage intelligent    | Classement par **catégories** (nourriture, business, sport…) et **langues** (FR/US/ES). |
+| 🕹️ Rafraîchissement manuel | L’utilisateur contrôle les actualisations (pas de cron imposé). |
+| 🧠 Historique enrichi     | Statistiques d’évolution et **notes personnelles**. |
+| 🔔 Alertes & notifications | Seuil configurable côté Supabase. |
+| 🛡️ Authentification forte | Accès par **login + mot de passe** stockés dans Supabase. |
+| 📦 Intégration Supabase   | Stockage des vidéos, notes, historiques, utilisateurs. |
+| 🧱 Structure scalable      | Prêt à être hébergé publiquement après validation. |
+
+---
+
+## 📚 Sources utilisées
+
+| Service/API | Lien |
+|-------------|------|
+| 🧠 YouTube Data API | [developers.google.com/youtube/v3](https://developers.google.com/youtube/v3) |
+| 🔐 Supabase (Base de données) | [supabase.com](https://supabase.com) |
+
+---
+
+## 🛠️ Stack technique
+
+| Côté       | Techno utilisée |
+|------------|-----------------|
+| Backend    | ⚙️ Node.js (HTTP + Supabase REST) |
+| Frontend   | 🧭 SPA vanilla JS responsive (sans dépendances externes) |
+| Frontend   | ⚛️ React 18 (ESM CDN) + UI sombre optimisée |
+| Auth       | 🔐 En-têtes admin (user + mot de passe) |
+| BDD        | 🧩 Supabase (PostgreSQL) |
+
+---
+
+## 🔍 Fonctionnalités principales
+
+- 🔎 Recherche de vidéos populaires YouTube par pays et catégorie.
+- 📈 Calcul automatique de la vélocité (vues/h) + distinction shorts.
+- 🧠 Historique des vidéos avec évolution des vues et likes.
+- ✍️ Ajout de notes personnelles + marquage « utilisée ».
+- 🔔 Alertes (seuil configurable via Supabase) et rafraîchissement manuel.
+- 👤 Accès sécurisé (panel d’authentification user + mot de passe dans l’UI, validé par Supabase).
+- ⚡ Interface web responsive en vanilla JS (mobile, tablette, desktop).
+- 👤 Accès sécurisé (auth forte via Supabase).
+- ⚡ Interface web responsive en vanilla JS (mobile & desktop).
+- ⚡ Interface React moderne, rapide et responsive.
+
+---
+
+## 📂 Lancer le projet en local
+
+```bash
+npm install
+npm run init:db # crée/actualise les tables Supabase et l'admin par défaut (zakamon)
+npm start       # http://localhost:4443
+```
+
+Le tableau de bord web permet :
+- Connexion sécurisée via le **panel d’authentification** (user + mot de passe Supabase).
+- Identifiants par défaut visibles dans l’UI : `zakamon` / `4GS49PFJ$64@Nr*eXEPa9z%4`.
+  - Le formulaire complet est disponible sur `/login` : il vérifie les identifiants Supabase, mémorise l’accès sur l’appareil (localStorage) puis redirige vers le tableau de bord.
+Le tableau de bord React permet :
+- Connexion sécurisée (bouton "Se connecter") avec les identifiants Supabase (`zakamon` / `4GS49PFJ$64@Nr*eXEPa9z%4` par défaut).
+- Filtrage par pays, catégorie, et shorts uniquement.
+- Rafraîchissement des tendances avec YouTube Data API depuis l’UI.
+- Annotation et suivi (note + marquage "utilisée") persistés dans Supabase.
+
+---
+
+## 🧠 Licence
+
+Ce projet est personnel, non destiné à un usage public pour l’instant. Toutes les API utilisées sont soumises aux [CGU de Google](https://developers.google.com/youtube/terms/api-services-terms-of-service).
+
+## 🏁 Démarrage rapide (prototype Node.js minimal)
+
+1. Copie le fichier `.env.example` en `.env` et ajoute les secrets ci-dessous (ou utilise directement ceux fournis) :
+   ```env
+   SUPABASE_URL=https://ltxjjnzsphhprykuwwye.supabase.co
+   SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imx0eGpqbnpzcGhocHJ5a3V3d3llIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2NDc4ODIwNiwiZXhwIjoyMDgwMzY0MjA2fQ.MTSelIYvHPdV4-6aHua7bHAHBuG6zniNmgLLARePZCs
+   SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imx0eGpqbnpzcGhocHJ5a3V3d3llIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQ3ODgyMDYsImV4cCI6MjA4MDM2NDIwNn0.AR4MHCGyhBDpX3BTBIqQh0qap6tOLUHfuP8HMofF3Sk
+   YOUTUBE_API_KEY=votre_cle
+   # Identifiant par défaut injecté dans la table `admins` lors du init:db
+   ADMIN_USER=zakamon
+   ADMIN_PASSWORD=4GS49PFJ$64@Nr*eXEPa9z%4
+   ```
+2. Initialise les tables Supabase (YouTube + historique + comptes admin) :
+   ```bash
+   npm run init:db
+   ```
+3. Lance le serveur privé en local :
+   ```bash
+   npm start
+   ```
+4. Ouvre http://localhost:4443 pour afficher le tableau de bord : filtrage par pays/thématique, badge Shorts, notes et marquage « utilisée ».
+5. Authentification : le bouton "Se connecter" valide l'utilisateur/mot de passe via Supabase (`public.admins`). Les en-têtes `X-Admin-User` et `X-Admin-Pass` sont ensuite ajoutés automatiquement pour les actions sécurisées (rafraîchissement, notes, marquage).
+
+## 🗄️ SQL à exécuter dans Supabase (SQL Editor)
+
+Les commandes suivantes permettent de créer manuellement toutes les tables utilisées par l’authentification Supabase et le stockage des tendances (à lancer dans le SQL Editor Supabase ou via `psql`) :
+
+```sql
+create extension if not exists "uuid-ossp";
+
+create table if not exists public.videos (
+  id text primary key,
+  title text not null,
+  description text,
+  country char(2) not null,
+  category text,
+  view_count bigint,
+  like_count bigint,
+  published_at timestamptz,
+  duration_seconds integer,
+  is_short boolean default false,
+  velocity_per_hour numeric,
+  used boolean default false,
+  note text,
+  thumbnail_url text,
+  refreshed_at timestamptz default now()
+);
+
+create index if not exists idx_videos_velocity on public.videos (velocity_per_hour desc);
+create index if not exists idx_videos_country on public.videos (country);
+create index if not exists idx_videos_category on public.videos (category);
+
+create table if not exists public.video_history (
+  id uuid default uuid_generate_v4() primary key,
+  video_id text references public.videos(id) on delete cascade,
+  view_count bigint,
+  like_count bigint,
+  recorded_at timestamptz default now()
+);
+
+create table if not exists public.admins (
+  id uuid default uuid_generate_v4() primary key,
+  username text unique not null,
+  password text not null,
+  created_at timestamptz default now()
+);
+
+insert into public.admins (username, password)
+values ('zakamon', '4GS49PFJ$64@Nr*eXEPa9z%4')
+on conflict (username) do update set password = excluded.password;
+```
+
+> Remarque : le backend s’appuie sur l’API YouTube pour récupérer les tendances FR/US/ES, calcule la vélocité (vues/h), stocke dans Supabase, et conserve l’historique des vues/likes pour suivre l’évolution. Les actions protégées (rafraîchir, notes, marquage) utilisent uniquement `X-Admin-User` et `X-Admin-Pass`.
