@@ -170,6 +170,13 @@ create policy "Public read videos" on public.videos
 
 drop policy if exists "Service role manage videos" on public.videos;
 create policy "Service role manage videos" on public.videos
+-- Les requêtes publiques (anon) peuvent lire les vidéos
+create policy if not exists "Public read videos" on public.videos
+  for select
+  using (true);
+
+-- Seul le service role peut insérer/mettre à jour/supprimer les vidéos
+create policy if not exists "Service role manage videos" on public.videos
   for all
   using (auth.role() = 'service_role')
   with check (auth.role() = 'service_role');
@@ -181,12 +188,20 @@ create policy "Public read history" on public.video_history
 
 drop policy if exists "Service role manage history" on public.video_history;
 create policy "Service role manage history" on public.video_history
+-- Historique : lecture libre, écriture réservée au service role
+create policy if not exists "Public read history" on public.video_history
+  for select
+  using (true);
+
+create policy if not exists "Service role manage history" on public.video_history
   for all
   using (auth.role() = 'service_role')
   with check (auth.role() = 'service_role');
 
 drop policy if exists "Service role manage admins" on public.admins;
 create policy "Service role manage admins" on public.admins
+-- Admins : uniquement service role (authentification côté backend)
+create policy if not exists "Service role manage admins" on public.admins
   for all
   using (auth.role() = 'service_role')
   with check (auth.role() = 'service_role');
