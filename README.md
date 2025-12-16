@@ -116,11 +116,15 @@ Ce projet est personnel, non destiné à un usage public pour l’instant. Toute
 
 ## 🗄️ SQL à exécuter dans Supabase (SQL Editor)
 
+Un fichier prêt à l'emploi est fourni : [`supabase.sql`](./supabase.sql). Tu peux le coller dans le SQL Editor Supabase ou l'exécuter via `psql` pour créer les tables, activer le RLS et insérer l’admin par défaut.
+
 Les commandes suivantes permettent de créer manuellement toutes les tables utilisées par l’authentification Supabase et le stockage des tendances (à lancer dans le SQL Editor Supabase ou via `psql`) :
 
 ```sql
+-- Extensions
 create extension if not exists "uuid-ossp";
 
+-- Tables
 create table if not exists public.videos (
   id text primary key,
   title text not null,
@@ -158,11 +162,13 @@ create table if not exists public.admins (
   created_at timestamptz default now()
 );
 
+-- RLS
 -- RLS et politiques pour sécuriser l'accès depuis Supabase REST
 alter table public.videos enable row level security;
 alter table public.video_history enable row level security;
 alter table public.admins enable row level security;
 
+-- Policies: VIDEOS
 drop policy if exists "Public read videos" on public.videos;
 create policy "Public read videos" on public.videos
   for select
@@ -181,6 +187,7 @@ create policy if not exists "Service role manage videos" on public.videos
   using (auth.role() = 'service_role')
   with check (auth.role() = 'service_role');
 
+-- Policies: VIDEO_HISTORY
 drop policy if exists "Public read history" on public.video_history;
 create policy "Public read history" on public.video_history
   for select
@@ -198,6 +205,9 @@ create policy if not exists "Service role manage history" on public.video_histor
   using (auth.role() = 'service_role')
   with check (auth.role() = 'service_role');
 
+-- Policies: ADMINS
+drop policy if exists "Service role manage admins" on public.admins;
+create policy "Service role manage admins" on public.admins
 drop policy if exists "Service role manage admins" on public.admins;
 create policy "Service role manage admins" on public.admins
 -- Admins : uniquement service role (authentification côté backend)
@@ -206,9 +216,11 @@ create policy if not exists "Service role manage admins" on public.admins
   using (auth.role() = 'service_role')
   with check (auth.role() = 'service_role');
 
+-- Seed / upsert admin
 insert into public.admins (username, password)
 values ('zakamon', '4GS49PFJ$64@Nr*eXEPa9z%4')
-on conflict (username) do update set password = excluded.password;
+on conflict (username) do update
+set password = excluded.password;
 ```
 
 > Remarque : le backend s’appuie sur l’API YouTube pour récupérer les tendances FR/US/ES, calcule la vélocité (vues/h), stocke dans Supabase, et conserve l’historique des vues/likes pour suivre l’évolution. Les actions protégées (rafraîchir, notes, marquage) utilisent uniquement `X-Admin-User` et `X-Admin-Pass`.
