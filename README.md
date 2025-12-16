@@ -163,6 +163,13 @@ alter table public.videos enable row level security;
 alter table public.video_history enable row level security;
 alter table public.admins enable row level security;
 
+drop policy if exists "Public read videos" on public.videos;
+create policy "Public read videos" on public.videos
+  for select
+  using (true);
+
+drop policy if exists "Service role manage videos" on public.videos;
+create policy "Service role manage videos" on public.videos
 -- Les requêtes publiques (anon) peuvent lire les vidéos
 create policy if not exists "Public read videos" on public.videos
   for select
@@ -174,6 +181,13 @@ create policy if not exists "Service role manage videos" on public.videos
   using (auth.role() = 'service_role')
   with check (auth.role() = 'service_role');
 
+drop policy if exists "Public read history" on public.video_history;
+create policy "Public read history" on public.video_history
+  for select
+  using (true);
+
+drop policy if exists "Service role manage history" on public.video_history;
+create policy "Service role manage history" on public.video_history
 -- Historique : lecture libre, écriture réservée au service role
 create policy if not exists "Public read history" on public.video_history
   for select
@@ -184,6 +198,8 @@ create policy if not exists "Service role manage history" on public.video_histor
   using (auth.role() = 'service_role')
   with check (auth.role() = 'service_role');
 
+drop policy if exists "Service role manage admins" on public.admins;
+create policy "Service role manage admins" on public.admins
 -- Admins : uniquement service role (authentification côté backend)
 create policy if not exists "Service role manage admins" on public.admins
   for all
