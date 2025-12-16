@@ -1,4 +1,89 @@
 (() => {
+  const getInitialApiBase = () => {
+    const fromAttr = (document.documentElement.getAttribute('data-api-base') || '').trim();
+    const stored = (localStorage.getItem('trendScopeApiBase') || '').trim();
+    if (stored) return stored;
+    if (fromAttr) return fromAttr;
+    if (window.location.protocol.startsWith('http')) return window.location.origin;
+    return '';
+  };
+
+  let apiBase = getInitialApiBase();
+  const state = {
+    token: null,
+    videos: [],
+    history: [],
+    notifications: [],
+    overview: null,
+    activity: [],
+    filters: {
+      country: 'FR',
+      category: '',
+      search: '',
+      shortOnly: false,
+    },
+  };
+
+  const setFullHeight = () => {
+    document.querySelectorAll('.js-fullheight').forEach((el) => {
+      el.style.height = `${window.innerHeight}px`;
+    });
+  };
+
+  const initPasswordToggle = () => {
+    document.querySelectorAll('[data-toggle="password"]').forEach((toggle) => {
+      toggle.addEventListener('click', () => {
+        const targetSelector = toggle.getAttribute('data-target');
+        if (!targetSelector) return;
+        const input = document.querySelector(targetSelector);
+        if (!input) return;
+        const isHidden = input.getAttribute('type') === 'password';
+        input.setAttribute('type', isHidden ? 'text' : 'password');
+        const icon = toggle.querySelector('i');
+        if (icon) {
+          icon.classList.toggle('fa-eye');
+          icon.classList.toggle('fa-eye-slash');
+        }
+      });
+    });
+  };
+
+  const toast = (message, variant = 'success') => {
+    const toastEl = document.getElementById('toast');
+    if (!toastEl) return;
+    toastEl.textContent = message;
+    toastEl.className = `toast ${variant === 'error' ? 'error' : ''} is-visible`;
+    setTimeout(() => {
+      toastEl.classList.remove('is-visible');
+    }, 2800);
+  };
+
+  const updateStatus = (message, variant = 'success') => {
+    const status = document.getElementById('login-status');
+    if (!status) return;
+    status.textContent = message;
+    status.className = `status is-visible status--${variant}`;
+  };
+
+  const updateApiBase = (value) => {
+    apiBase = value.trim();
+    if (apiBase.endsWith('/')) apiBase = apiBase.slice(0, -1);
+    if (apiBase) localStorage.setItem('trendScopeApiBase', apiBase);
+  };
+
+  const api = async (path, options = {}) => {
+    const headers = options.headers || {};
+    if (state.token) headers['X-Admin-Token'] = state.token;
+    if (options.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
+
+    const url = `${apiBase}${path}`;
+    let res;
+    try {
+      res = await fetch(url, { ...options, headers });
+    } catch (err) {
+      throw new Error('API injoignable : vérifie l’URL du backend');
+    }
+
   const apiBase = document.documentElement.getAttribute('data-api-base') || '';
   const state = {
     token: null,
@@ -359,6 +444,37 @@
     await fetchOverview();
   };
 
+  const initApiBaseField = () => {
+    const input = document.getElementById('api-base');
+    const testBtn = document.getElementById('btn-test-api');
+    if (input) {
+      input.value = apiBase || 'http://localhost:4443';
+      input.addEventListener('change', (e) => {
+        updateApiBase(e.target.value || '');
+      });
+    }
+
+    testBtn?.addEventListener('click', async () => {
+      const target = input?.value?.trim();
+      if (target) updateApiBase(target);
+      if (!apiBase) {
+        updateStatus('Renseigne une URL backend valide (http/https).', 'error');
+        toast('URL backend manquante', 'error');
+        return;
+      }
+      updateStatus('Test de connexion API…');
+      try {
+        const health = await api('/api/health');
+        updateHealthBadges(health);
+        toast('Backend joignable');
+        updateStatus('Backend joignable. Supabase/JWT testés.', 'success');
+      } catch (err) {
+        updateStatus(err.message, 'error');
+        toast(err.message, 'error');
+      }
+    });
+  };
+
   const showDashboard = (health) => {
     document.getElementById('login-screen')?.classList.add('d-none');
     document.getElementById('dashboard')?.classList.remove('d-none');
@@ -384,6 +500,11 @@
       const password = passwordInput.value.trim();
       const remember = rememberInput?.checked;
 
+      if (!apiBase) {
+        updateStatus('Configure l\'URL du backend avant de te connecter.', 'error');
+        toast('URL du backend requise', 'error');
+        return;
+      }
   const setFullHeight = () => {
     const fullHeightElements = document.querySelectorAll('.js-fullheight');
     fullHeightElements.forEach((el) => {
@@ -550,6 +671,7 @@
     setFullHeight();
     window.addEventListener('resize', setFullHeight);
     initPasswordToggle();
+    initApiBaseField();
     loadFilters();
     applyFiltersToForm();
     handleLogin();
