@@ -199,6 +199,7 @@ app.get('/api/health', async (_req, res) => {
 app.post('/api/login', async (req, res) => {
   const { username, password } = req.body || {};
   if (!username || !password) return res.status(400).json({ error: 'Identifiants requis' });
+  if (String(password).length < 16) return res.status(400).json({ error: 'Mot de passe trop court (16+)' });
 
   try {
     const { data, error } = await supabase
@@ -268,7 +269,6 @@ app.get('/api/notifications', authMiddleware, async (_req, res) => {
   const now = Date.now();
   const alerts = (data || [])
     .filter((v) => Number(v.velocity_per_hour || 0) >= ALERT_THRESHOLD)
-    .filter((v) => Number(v.velocity_per_hour || 0) >= 5000)
     .map((v) => ({
       id: v.id,
       title: v.title,
@@ -298,7 +298,6 @@ app.get('/api/activity', authMiddleware, async (_req, res) => {
   } catch (err) {
     return res.status(500).json({ error: 'Impossible de récupérer l’activité Supabase' });
   }
-  return res.json({ items: alerts });
 });
 
 app.post('/api/videos/refresh', authMiddleware, async (req, res) => {
