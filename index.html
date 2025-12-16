@@ -1,4 +1,5 @@
 <!doctype html>
+<html lang="fr" data-api-base="http://localhost:4443">
 <html lang="fr" data-api-base="">
 <html lang="fr">
 <head>
@@ -56,6 +57,14 @@
             <p class="text-muted mb-0">Les identifiants sont vérifiés côté Supabase avant d'accéder au tableau de bord.</p>
           </div>
           <form id="login-form" class="signin-form">
+            <div class="form-group mb-3">
+              <label for="api-base" class="form-label">URL du backend</label>
+              <div class="input-group">
+                <input id="api-base" type="url" class="form-control" name="api-base" placeholder="http://localhost:4443" autocomplete="off">
+                <button class="btn btn-outline-secondary" type="button" id="btn-test-api">Tester</button>
+              </div>
+              <small class="text-muted">Modifie l'URL si tu utilises un port ou domaine différent.</small>
+            </div>
             <div class="form-group mb-3">
               <label for="username" class="form-label">Nom d'utilisateur</label>
               <input id="username" type="text" class="form-control" name="username" placeholder="Admin Supabase" required autocomplete="username">
@@ -224,6 +233,7 @@
           <div id="history-content" class="history-content">Aucun historique chargé.</div>
         </div>
       </div>
+
 
 
       <div class="table-card glass-card">

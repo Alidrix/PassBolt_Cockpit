@@ -8631,6 +8631,8 @@ a.link-light:hover {
 .note-input { width: 100%; min-width: 180px; background: rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.12); color: var(--ts-text); border-radius:10px; padding:6px 8px; }
 .note-actions { display:flex; gap:8px; margin-top:6px; }
 .badge-short { background: rgba(124, 243, 255, 0.15); color: #bdf5ff; }
+.input-group { display:flex; align-items:stretch; gap:10px; }
+.input-group .form-control { flex:1; }
 
 @media (max-width: 992px) {
   .actions { width: 100%; justify-content: flex-start; }
