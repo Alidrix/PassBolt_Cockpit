@@ -74,6 +74,8 @@ Le tableau de bord web permet :
 - Connexion sécurisée via le **panel d’authentification** (user + mot de passe Supabase).
 - Popup verte de succès quand Supabase + JWT sont OK (vérifiés côté serveur).
 - Identifiants par défaut : `zakamon` / `4GS49PFJ$64@Nr*eXEPa9z%4` (injection via supabase.sql ou `npm run init:db`).
+- Synthèse Supabase : top vidéo par vélocité, date de dernier rafraîchissement, top 6 catégories et journal des insertions Supabase.
+- Notifications internes basées sur `ALERT_MIN_VELOCITY` (v/h) réglable dans `.env`.
 - Filtrage par pays, catégorie, recherche plein texte et shorts uniquement.
 - Rafraîchissement manuel des tendances YouTube (bouton "Rafraîchir (YouTube)") qui upsert les vidéos et l’historique.
 - Annotation et suivi (note + marquage "utilisée") persistés dans Supabase, historisation visible par vidéo.
@@ -98,6 +100,8 @@ Ce projet est personnel, non destiné à un usage public pour l’instant. Toute
    JWT_LEGACY_SECRET=<jwt_legacy_secret>
    # API YouTube
    YOUTUBE_API_KEY=<ta_cle_youtube>
+   # Seuil de vélocité (vues/h) pour déclencher les notifications internes
+   ALERT_MIN_VELOCITY=5000
    # Identifiant par défaut injecté dans la table `admins` lors du init:db
    ADMIN_USER=zakamon
    ADMIN_PASSWORD=4GS49PFJ$64@Nr*eXEPa9z%4
@@ -112,6 +116,7 @@ Ce projet est personnel, non destiné à un usage public pour l’instant. Toute
    ```
 4. Ouvre http://localhost:4443 pour afficher le tableau de bord : filtrage par pays/thématique, badge Shorts, notes et marquage « utilisée ».
 5. Authentification : le bouton "Se connecter" valide l'utilisateur/mot de passe via Supabase (`public.admins`). Les en-têtes `X-Admin-User` et `X-Admin-Pass` sont ensuite ajoutés automatiquement pour les actions sécurisées (rafraîchissement, notes, marquage).
+6. API internes disponibles une fois authentifié : `/api/overview` (synthèse Supabase), `/api/activity` (journal des insertions), `/api/notifications` (seuil `ALERT_MIN_VELOCITY`), `/api/videos` (filtré), `/api/videos/refresh` (rafraîchissement YouTube).
 
 ## 🗄️ SQL à exécuter dans Supabase (SQL Editor)
 

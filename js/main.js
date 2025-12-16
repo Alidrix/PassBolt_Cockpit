@@ -4,6 +4,8 @@
     videos: [],
     history: [],
     notifications: [],
+    overview: null,
+    activity: [],
     filters: {
       country: 'FR',
       category: '',
@@ -82,6 +84,11 @@
     const shortsEl = document.querySelector('[data-stat="shorts"]');
     const velocityEl = document.querySelector('[data-stat="velocity"]');
 
+    const total = state.overview?.counts?.totalVideos ?? state.videos.length;
+    const shorts = state.overview?.counts?.shortCount ?? state.videos.filter((v) => v.is_short).length;
+    const avgVelocity = state.overview?.averageVelocity ?? (state.videos.length
+      ? Math.round(state.videos.reduce((acc, v) => acc + Number(v.velocity_per_hour || 0), 0) / state.videos.length)
+      : 0);
     const total = state.videos.length;
     const shorts = state.videos.filter((v) => v.is_short).length;
     const avgVelocity = state.videos.length
@@ -96,6 +103,7 @@
   const renderNotifications = () => {
     const list = document.getElementById('notification-list');
     const count = document.getElementById('notif-count');
+    const threshold = document.getElementById('notif-threshold');
     if (!list) return;
     list.innerHTML = '';
     state.notifications.forEach((notif) => {
@@ -112,6 +120,9 @@
       list.appendChild(li);
     });
     if (count) count.textContent = `${state.notifications.length} alertes`;
+    if (threshold && state.notificationsThreshold) {
+      threshold.textContent = `Seuil : ${state.notificationsThreshold.toLocaleString('fr-FR')} v/h`;
+    }
   };
 
   const renderHistory = () => {
@@ -191,6 +202,67 @@
     });
   };
 
+  const renderOverview = () => {
+    const lastRefresh = document.getElementById('overview-last-refresh');
+    const topTitle = document.getElementById('overview-top-title');
+    const topVelocity = document.getElementById('overview-top-velocity');
+    const topMeta = document.getElementById('overview-top-meta');
+    const categoriesList = document.getElementById('category-list');
+
+    if (!state.overview) return;
+
+    if (lastRefresh) {
+      lastRefresh.textContent = state.overview.lastRefresh
+        ? new Date(state.overview.lastRefresh).toLocaleString('fr-FR')
+        : 'Non rafraîchi';
+    }
+
+    if (state.overview.topVideo && topTitle && topVelocity && topMeta) {
+      topTitle.textContent = state.overview.topVideo.title || 'Vidéo';
+      topVelocity.textContent = `${Math.round(state.overview.topVideo.velocity_per_hour || 0).toLocaleString('fr-FR')} v/h`;
+      topMeta.textContent = `${state.overview.topVideo.country} • ${state.overview.topVideo.category || 'Catégorie inconnue'}${state.overview.topVideo.is_short ? ' • Short' : ''}`;
+    }
+
+    if (categoriesList) {
+      categoriesList.innerHTML = '';
+      if (!state.overview.categories?.length) {
+        categoriesList.innerHTML = '<li class="text-muted">Aucune catégorie détectée</li>';
+      } else {
+        state.overview.categories.forEach((cat) => {
+          const li = document.createElement('li');
+          li.className = 'category-chip';
+          li.innerHTML = `<span>${cat.name}</span><strong>${cat.count}</strong>`;
+          categoriesList.appendChild(li);
+        });
+      }
+    }
+  };
+
+  const renderActivity = () => {
+    const container = document.getElementById('activity-list');
+    if (!container) return;
+    container.innerHTML = '';
+    if (!state.activity.length) {
+      container.innerHTML = '<li class="activity-item muted">Aucune activité récente.</li>';
+      return;
+    }
+    state.activity.forEach((item) => {
+      const li = document.createElement('li');
+      li.className = 'activity-item';
+      li.innerHTML = `
+        <div>
+          <strong>${item.title}</strong>
+          <div class="small text-muted">${item.country} • ${new Date(item.recorded_at).toLocaleString('fr-FR')}</div>
+        </div>
+        <div class="activity-metrics">
+          <span>${Number(item.view_count || 0).toLocaleString('fr-FR')} vues</span>
+          <span>${Number(item.like_count || 0).toLocaleString('fr-FR')} likes</span>
+        </div>
+      `;
+      container.appendChild(li);
+    });
+  };
+
   const fetchVideos = async () => {
     const params = new URLSearchParams();
     if (state.filters.country) params.set('country', state.filters.country);
@@ -205,6 +277,9 @@
   };
 
   const fetchNotifications = async () => {
+    const { items, threshold } = await api('/api/notifications');
+    state.notifications = items || [];
+    state.notificationsThreshold = threshold;
     const { items } = await api('/api/notifications');
     state.notifications = items || [];
     renderNotifications();
@@ -216,6 +291,18 @@
     renderHistory();
   };
 
+  const fetchOverview = async () => {
+    state.overview = await api('/api/overview');
+    renderStats();
+    renderOverview();
+  };
+
+  const fetchActivity = async () => {
+    const { items } = await api('/api/activity');
+    state.activity = items || [];
+    renderActivity();
+  };
+
   const refreshTrending = async () => {
     const { country } = state.filters;
     await api('/api/videos/refresh', {
@@ -225,6 +312,8 @@
     toast(`Rafraîchissement lancé pour ${country}.`);
     await fetchVideos();
     await fetchNotifications();
+    await fetchOverview();
+    await fetchActivity();
   };
 
   const saveVideo = async (id) => {
@@ -238,6 +327,7 @@
     });
     toast('Note synchronisée avec Supabase');
     await fetchNotifications();
+    await fetchOverview();
   };
 
   const showDashboard = (health) => {
@@ -341,6 +431,7 @@
         updateStatus('Connexion validée par Supabase et JWT actifs.', 'success');
         toast('Connexion OK : Supabase et JWT UP');
         showDashboard(health);
+        await Promise.all([fetchOverview(), fetchVideos(), fetchNotifications(), fetchActivity()]);
         await fetchVideos();
         await fetchNotifications();
       } catch (err) {
@@ -392,6 +483,12 @@
   const bindButtons = () => {
     document.getElementById('btn-refresh')?.addEventListener('click', refreshTrending);
     document.getElementById('btn-load')?.addEventListener('click', async () => {
+      await Promise.all([fetchOverview(), fetchVideos(), fetchNotifications(), fetchActivity()]);
+    });
+    document.getElementById('btn-load-overview')?.addEventListener('click', async () => {
+      await Promise.all([fetchOverview(), fetchNotifications()]);
+    });
+    document.getElementById('btn-activity')?.addEventListener('click', fetchActivity);
       await fetchVideos();
       await fetchNotifications();
     });
@@ -411,6 +508,7 @@
       showDashboard(health);
       loadFilters();
       applyFiltersToForm();
+      await Promise.all([fetchOverview(), fetchVideos(), fetchNotifications(), fetchActivity()]);
       await fetchVideos();
       await fetchNotifications();
     } catch (err) {

@@ -8594,6 +8594,22 @@ a.link-light:hover {
 .history-item { display:flex; justify-content:space-between; align-items:center; padding:6px 0; border-bottom:1px dashed rgba(255,255,255,0.06); }
 .history-item:last-child { border-bottom:none; }
 
+.panels-wide { grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+.overview-card { grid-column: span 2; min-height: 220px; }
+.overview-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap:14px; align-items:center; }
+.overview-title { color:#fff; margin:4px 0; }
+.velocity-chip { display:inline-flex; align-items:center; gap:6px; padding:8px 12px; border-radius:999px; background: rgba(124, 243, 255, 0.12); border:1px solid rgba(124,243,255,0.4); color:#bdf5ff; font-weight:700; margin-top:8px; }
+.bullet-list { list-style:none; padding:0; margin:0; display:flex; flex-direction:column; gap:6px; color: var(--ts-text); }
+.bullet-list li { display:flex; gap:8px; align-items:flex-start; }
+.bullet-list li::before { content:'•'; color: var(--ts-primary); }
+.inline-actions { display:flex; gap:10px; margin-top:12px; flex-wrap:wrap; }
+.category-list { list-style:none; padding:0; margin:0; display:flex; flex-direction:column; gap:8px; }
+.category-chip { display:flex; justify-content:space-between; align-items:center; padding:10px 12px; border-radius:12px; background: rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.08); color: var(--ts-text); }
+.activity-list { list-style:none; padding:0; margin:0; display:flex; flex-direction:column; gap:8px; }
+.activity-item { display:flex; justify-content:space-between; align-items:center; padding:10px 12px; border-radius:12px; background: rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.08); }
+.activity-metrics { display:flex; gap:10px; color: var(--ts-muted); }
+.activity-item.muted { color: var(--ts-muted); }
+
 .table-card { padding:16px; border-radius:18px; }
 .table { width:100%; border-collapse: collapse; }
 .table thead { background: rgba(255,255,255,0.04); }
@@ -8620,4 +8636,5 @@ a.link-light:hover {
   .actions { width: 100%; justify-content: flex-start; }
   .dashboard-header { flex-direction: column; align-items: flex-start; }
   .table-responsive { max-height: unset; }
+  .overview-card { grid-column: span 1; }
 }

@@ -16,6 +16,7 @@ const {
   JWT_STANDBY_KEY,
   JWT_LEGACY_SECRET,
   YOUTUBE_API_KEY,
+  ALERT_MIN_VELOCITY,
 } = process.env;
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
@@ -31,6 +32,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
   auth: { autoRefreshToken: false, persistSession: false },
 });
 
+const ALERT_THRESHOLD = Number(ALERT_MIN_VELOCITY) || 5000;
 const JWT_SECRETS = [JWT_CURRENT_KEY, JWT_STANDBY_KEY, JWT_LEGACY_SECRET].filter(Boolean);
 
 const signToken = (payload) => {
@@ -109,6 +111,67 @@ const fetchHealth = async () => {
   return health;
 };
 
+const fetchOverview = async () => {
+  const [countRes, shortCountRes, velocityRes, lastRefreshRes, topRes, categoryRes] = await Promise.all([
+    supabase.from('videos').select('id', { count: 'exact', head: true }),
+    supabase.from('videos').select('id', { count: 'exact', head: true }).eq('is_short', true),
+    supabase.from('videos').select('velocity_per_hour').limit(1000),
+    supabase.from('videos').select('refreshed_at').order('refreshed_at', { ascending: false }).limit(1).maybeSingle(),
+    supabase.from('videos').select('id, title, country, velocity_per_hour, is_short, category').order('velocity_per_hour', { ascending: false }).limit(1).maybeSingle(),
+    supabase.from('videos').select('category').limit(500),
+  ]);
+
+  const errored = [countRes, shortCountRes, velocityRes, lastRefreshRes, topRes, categoryRes].find((r) => r?.error);
+  if (errored?.error) throw errored.error;
+
+  const velocities = (velocityRes.data || [])
+    .map((v) => Number(v.velocity_per_hour || 0))
+    .filter((n) => Number.isFinite(n));
+  const averageVelocity = velocities.length
+    ? Math.round(velocities.reduce((acc, n) => acc + n, 0) / velocities.length)
+    : 0;
+
+  const categoriesCount = {};
+  (categoryRes.data || []).forEach(({ category }) => {
+    if (!category) return;
+    categoriesCount[category] = (categoriesCount[category] || 0) + 1;
+  });
+  const topCategories = Object.entries(categoriesCount)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 6)
+    .map(([name, count]) => ({ name, count }));
+
+  return {
+    counts: {
+      totalVideos: countRes.count || 0,
+      shortCount: shortCountRes.count || 0,
+    },
+    averageVelocity,
+    lastRefresh: lastRefreshRes.data?.refreshed_at || null,
+    topVideo: topRes.data || null,
+    categories: topCategories,
+  };
+};
+
+const fetchActivity = async () => {
+  const { data, error } = await supabase
+    .from('video_history')
+    .select('video_id, view_count, like_count, recorded_at, videos(title, country)')
+    .order('recorded_at', { ascending: false })
+    .limit(20);
+
+  if (error) throw error;
+
+  return (data || []).map((row) => ({
+    video_id: row.video_id,
+    title: row.videos?.title || 'Vidéo',
+    country: row.videos?.country || '-',
+    view_count: row.view_count,
+    like_count: row.like_count,
+    recorded_at: row.recorded_at,
+  }));
+};
+
 app.get('/api/health', async (_req, res) => {
   const health = await fetchHealth();
   return res.json(health);
@@ -185,6 +248,7 @@ app.get('/api/notifications', authMiddleware, async (_req, res) => {
 
   const now = Date.now();
   const alerts = (data || [])
+    .filter((v) => Number(v.velocity_per_hour || 0) >= ALERT_THRESHOLD)
     .filter((v) => Number(v.velocity_per_hour || 0) >= 5000)
     .map((v) => ({
       id: v.id,
@@ -196,6 +260,25 @@ app.get('/api/notifications', authMiddleware, async (_req, res) => {
       note: v.note,
     }));
 
+  return res.json({ items: alerts, threshold: ALERT_THRESHOLD });
+});
+
+app.get('/api/overview', authMiddleware, async (_req, res) => {
+  try {
+    const overview = await fetchOverview();
+    return res.json(overview);
+  } catch (err) {
+    return res.status(500).json({ error: 'Impossible de charger la synthèse Supabase' });
+  }
+});
+
+app.get('/api/activity', authMiddleware, async (_req, res) => {
+  try {
+    const items = await fetchActivity();
+    return res.json({ items });
+  } catch (err) {
+    return res.status(500).json({ error: 'Impossible de récupérer l’activité Supabase' });
+  }
   return res.json({ items: alerts });
 });
 
