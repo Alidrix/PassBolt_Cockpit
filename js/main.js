@@ -1,15 +1,4 @@
 (() => {
-  const getInitialApiBase = () => {
-    const fromAttr = (document.documentElement.getAttribute('data-api-base') || '').trim();
-    const stored = (localStorage.getItem('trendScopeApiBase') || '').trim();
-    if (stored) return stored;
-    if (fromAttr) return fromAttr;
-    if (window.location.protocol.startsWith('http')) return window.location.origin;
-    return 'http://localhost:4443';
-    return '';
-  };
-
-  let apiBase = getInitialApiBase();
   const state = {
     token: null,
     videos: [],
@@ -17,6 +6,7 @@
     notifications: [],
     overview: null,
     activity: [],
+    notificationsThreshold: null,
     filters: {
       country: 'FR',
       category: '',
@@ -24,6 +14,17 @@
       shortOnly: false,
     },
   };
+
+  const getInitialApiBase = () => {
+    const fromAttr = (document.documentElement.getAttribute('data-api-base') || '').trim();
+    const stored = (localStorage.getItem('trendScopeApiBase') || '').trim();
+    if (stored) return stored;
+    if (fromAttr) return fromAttr;
+    if (window.location.protocol.startsWith('http')) return window.location.origin;
+    return 'http://localhost:4443';
+  };
+
+  let apiBase = getInitialApiBase();
 
   const setFullHeight = () => {
     document.querySelectorAll('.js-fullheight').forEach((el) => {
@@ -81,109 +82,23 @@
     const value = (input.value || '').trim();
     if (value && value !== apiBase) updateApiBase(value);
     return apiBase;
+  };
+
   const api = async (path, options = {}) => {
-    const headers = options.headers || {};
+    const headers = { ...(options.headers || {}) };
     if (state.token) headers['X-Admin-Token'] = state.token;
     if (options.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
+
+    if (!apiBase) throw new Error("Configure l'URL du backend (http/https) avant de continuer.");
 
     const url = `${apiBase}${path}`;
     let res;
     try {
       res = await fetch(url, { ...options, headers });
     } catch (err) {
-      throw new Error('API injoignable : vérifie l’URL du backend');
+      throw new Error('API injoignable : vérifie l\'URL du backend');
     }
 
-  const apiBase = document.documentElement.getAttribute('data-api-base') || '';
-  const state = {
-    token: null,
-    videos: [],
-    history: [],
-    notifications: [],
-    overview: null,
-    activity: [],
-    filters: {
-      country: 'FR',
-      category: '',
-      search: '',
-      shortOnly: false,
-    },
-  };
-
-  const setFullHeight = () => {
-    document.querySelectorAll('.js-fullheight').forEach((el) => {
-      el.style.height = `${window.innerHeight}px`;
-    });
-  };
-
-  const initPasswordToggle = () => {
-    document.querySelectorAll('[data-toggle="password"]').forEach((toggle) => {
-      toggle.addEventListener('click', () => {
-        const targetSelector = toggle.getAttribute('data-target');
-        if (!targetSelector) return;
-        const input = document.querySelector(targetSelector);
-        if (!input) return;
-        const isHidden = input.getAttribute('type') === 'password';
-        input.setAttribute('type', isHidden ? 'text' : 'password');
-        const icon = toggle.querySelector('i');
-        if (icon) {
-          icon.classList.toggle('fa-eye');
-          icon.classList.toggle('fa-eye-slash');
-        }
-      });
-    });
-  };
-
-  const toast = (message, variant = 'success') => {
-    const toastEl = document.getElementById('toast');
-    if (!toastEl) return;
-    toastEl.textContent = message;
-    toastEl.className = `toast ${variant === 'error' ? 'error' : ''} is-visible`;
-    setTimeout(() => {
-      toastEl.classList.remove('is-visible');
-    }, 2800);
-  };
-
-  const updateStatus = (message, variant = 'success') => {
-    const status = document.getElementById('login-status');
-    if (!status) return;
-    status.textContent = message;
-    status.className = `status is-visible status--${variant}`;
-  };
-
-  const api = async (path, options = {}) => {
-    const headers = options.headers || {};
-    if (state.token) headers['X-Admin-Token'] = state.token;
-    if (options.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
-
-    const url = `${apiBase}${path}`;
-    let res;
-    try {
-      res = await fetch(url, { ...options, headers });
-    } catch (err) {
-      throw new Error('API injoignable : vérifie l’URL du backend');
-    }
-
-    if (!res.ok) {
-      const payload = await res.json().catch(() => ({}));
-      throw new Error(payload.error || 'Requête échouée');
-    }
-    return res.json();
-  };
-
-  const updateHealthBadges = (health = {}) => {
-    const container = document.getElementById('health-status');
-    if (!container) return;
-    container.querySelectorAll('.status-badge').forEach((badge) => {
-      const key = badge.getAttribute('data-key');
-      const ok = Boolean(health[key]);
-      badge.classList.toggle('is-ok', ok);
-      badge.classList.toggle('is-ko', !ok);
-      badge.textContent = `${key.toUpperCase()} ${ok ? 'UP' : 'KO'}`;
-    });
-  };
-
-    const res = await fetch(path, { ...options, headers });
     if (!res.ok) {
       const payload = await res.json().catch(() => ({}));
       throw new Error(payload.error || 'Requête échouée');
@@ -210,14 +125,10 @@
 
     const total = state.overview?.counts?.totalVideos ?? state.videos.length;
     const shorts = state.overview?.counts?.shortCount ?? state.videos.filter((v) => v.is_short).length;
-    const avgVelocity = state.overview?.averageVelocity ?? (state.videos.length
-      ? Math.round(state.videos.reduce((acc, v) => acc + Number(v.velocity_per_hour || 0), 0) / state.videos.length)
-      : 0);
-    const total = state.videos.length;
-    const shorts = state.videos.filter((v) => v.is_short).length;
-    const avgVelocity = state.videos.length
-      ? Math.round(state.videos.reduce((acc, v) => acc + Number(v.velocity_per_hour || 0), 0) / state.videos.length)
-      : 0;
+    const avgVelocity = state.overview?.averageVelocity
+      ?? (state.videos.length
+        ? Math.round(state.videos.reduce((acc, v) => acc + Number(v.velocity_per_hour || 0), 0) / state.videos.length)
+        : 0);
 
     if (totalEl) totalEl.textContent = total;
     if (shortsEl) shortsEl.textContent = shorts;
@@ -282,15 +193,20 @@
       const parsed = JSON.parse(raw);
       state.filters = { ...state.filters, ...parsed };
     } catch (err) {
-      // ignore
+      // ignore JSON errors
     }
   };
 
   const applyFiltersToForm = () => {
-    document.getElementById('filter-country').value = state.filters.country;
-    document.getElementById('filter-category').value = state.filters.category;
-    document.getElementById('filter-search').value = state.filters.search;
-    document.getElementById('filter-short').checked = state.filters.shortOnly;
+    const country = document.getElementById('filter-country');
+    const category = document.getElementById('filter-category');
+    const search = document.getElementById('filter-search');
+    const shortOnly = document.getElementById('filter-short');
+
+    if (country) country.value = state.filters.country;
+    if (category) category.value = state.filters.category;
+    if (search) search.value = state.filters.search;
+    if (shortOnly) shortOnly.checked = state.filters.shortOnly;
   };
 
   const renderTable = () => {
@@ -302,7 +218,7 @@
       tr.innerHTML = `
         <td>
           <div class="fw-bold text-light">${video.title}</div>
-          <div class="small text-muted">${video.description?.slice(0, 80) || ''}</div>
+          <div class="small text-muted">${(video.description || '').slice(0, 80)}</div>
           <div class="small"><a href="https://www.youtube.com/watch?v=${video.id}" target="_blank" rel="noopener">Ouvrir sur YouTube</a></div>
         </td>
         <td>${video.country}</td>
@@ -404,8 +320,6 @@
     const { items, threshold } = await api('/api/notifications');
     state.notifications = items || [];
     state.notificationsThreshold = threshold;
-    const { items } = await api('/api/notifications');
-    state.notifications = items || [];
     renderNotifications();
   };
 
@@ -434,10 +348,12 @@
       body: JSON.stringify({ country, maxResults: 10 }),
     });
     toast(`Rafraîchissement lancé pour ${country}.`);
-    await fetchVideos();
-    await fetchNotifications();
-    await fetchOverview();
-    await fetchActivity();
+    await Promise.all([
+      fetchVideos(),
+      fetchNotifications(),
+      fetchOverview(),
+      fetchActivity(),
+    ]);
   };
 
   const saveVideo = async (id) => {
@@ -450,8 +366,7 @@
       body: JSON.stringify({ note, used }),
     });
     toast('Note synchronisée avec Supabase');
-    await fetchNotifications();
-    await fetchOverview();
+    await Promise.all([fetchNotifications(), fetchOverview()]);
   };
 
   const initApiBaseField = () => {
@@ -459,10 +374,6 @@
     const testBtn = document.getElementById('btn-test-api');
     if (input) {
       input.value = apiBase || 'http://localhost:4443';
-      input.addEventListener('input', (e) => {
-        updateApiBase(e.target.value || '');
-      });
-      input.addEventListener('blur', (e) => {
       input.addEventListener('change', (e) => {
         updateApiBase(e.target.value || '');
       });
@@ -472,7 +383,7 @@
       const target = input?.value?.trim();
       if (target) updateApiBase(target);
       if (!apiBase) {
-        updateStatus('Renseigne une URL backend valide (http/https).', 'error');
+        updateStatus("Renseigne une URL backend valide (http/https).", 'error');
         toast('URL backend manquante', 'error');
         return;
       }
@@ -492,7 +403,15 @@
   const showDashboard = (health) => {
     document.getElementById('login-screen')?.classList.add('d-none');
     document.getElementById('dashboard')?.classList.remove('d-none');
-    updateHealthBadges(health);
+    if (health) updateHealthBadges(health);
+  };
+
+  const logout = () => {
+    state.token = null;
+    localStorage.removeItem('trendScopeToken');
+    document.getElementById('dashboard')?.classList.add('d-none');
+    document.getElementById('login-screen')?.classList.remove('d-none');
+    updateStatus('Session terminée. Renseigne tes identifiants pour rouvrir le tableau.', 'success');
   };
 
   const handleLogin = () => {
@@ -504,9 +423,7 @@
     if (!form || !usernameInput || !passwordInput) return;
 
     const storedUser = localStorage.getItem('trendScopeUser');
-    const storedPass = localStorage.getItem('trendScopePass');
     if (storedUser) usernameInput.value = storedUser;
-    if (storedPass) passwordInput.value = storedPass;
 
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
@@ -516,89 +433,45 @@
       const remember = rememberInput?.checked;
 
       if (!apiBase) {
-        updateStatus('Configure l\'URL du backend avant de te connecter.', 'error');
+        updateStatus("Configure l'URL du backend avant de te connecter.", 'error');
         toast('URL du backend requise', 'error');
         return;
       }
-  const setFullHeight = () => {
-    const fullHeightElements = document.querySelectorAll('.js-fullheight');
-    fullHeightElements.forEach((el) => {
-      el.style.height = `${window.innerHeight}px`;
-    });
-  };
-
-  const initPasswordToggle = () => {
-    document.querySelectorAll('[data-toggle="password"]').forEach((toggle) => {
-      toggle.addEventListener('click', () => {
-        const targetSelector = toggle.getAttribute('data-target');
-        if (!targetSelector) return;
-        const input = document.querySelector(targetSelector);
-        if (!input) return;
-        const isHidden = input.getAttribute('type') === 'password';
-        input.setAttribute('type', isHidden ? 'text' : 'password');
-        const icon = toggle.querySelector('i');
-        if (icon) {
-          icon.classList.toggle('fa-eye');
-          icon.classList.toggle('fa-eye-slash');
-        }
-      });
-    });
-  };
-
-  const updateStatus = (message, variant = 'success') => {
-    const status = document.getElementById('login-status');
-    if (!status) return;
-    status.textContent = message;
-    status.className = `status is-visible status--${variant}`;
-  };
-
-  const handleLogin = () => {
-    const form = document.getElementById('login-form');
-    const usernameInput = document.getElementById('username');
-    const passwordInput = document.getElementById('password');
-    const rememberInput = document.getElementById('remember');
-
-    if (!form || !usernameInput || !passwordInput) return;
-
-    // Pré-remplit depuis le stockage local pour fluidifier les tests en local.
-    const storedUser = localStorage.getItem('trendScopeUser');
-    const storedPass = localStorage.getItem('trendScopePass');
-    if (storedUser) usernameInput.value = storedUser;
-    if (storedPass) passwordInput.value = storedPass;
-
-    form.addEventListener('submit', (event) => {
-      event.preventDefault();
-      const username = usernameInput.value.trim();
-      const password = passwordInput.value.trim();
-      const remember = rememberInput?.checked;
 
       if (!username || !password) {
-        updateStatus('Merci de renseigner un identifiant et un mot de passe.', 'error');
+        updateStatus('Renseigne un identifiant et un mot de passe.', 'error');
         return;
       }
 
-      if (remember) {
-        localStorage.setItem('trendScopeUser', username);
-        localStorage.setItem('trendScopePass', password);
-      } else {
-        localStorage.removeItem('trendScopeUser');
-        localStorage.removeItem('trendScopePass');
+      if (password.length < 16) {
+        updateStatus('Le mot de passe doit contenir au moins 16 caractères.', 'error');
+        return;
       }
 
       updateStatus('Connexion en cours…');
       try {
-        const { token, health } = await api('/api/login', {
+        const { token, health, user } = await api('/api/login', {
           method: 'POST',
           body: JSON.stringify({ username, password }),
         });
         state.token = token;
         localStorage.setItem('trendScopeToken', token);
+        if (remember) {
+          localStorage.setItem('trendScopeUser', user?.username || username);
+        } else {
+          localStorage.removeItem('trendScopeUser');
+        }
         updateStatus('Connexion validée par Supabase et JWT actifs.', 'success');
         toast('Connexion OK : Supabase et JWT UP');
         showDashboard(health);
-        await Promise.all([fetchOverview(), fetchVideos(), fetchNotifications(), fetchActivity()]);
-        await fetchVideos();
-        await fetchNotifications();
+        loadFilters();
+        applyFiltersToForm();
+        await Promise.all([
+          fetchOverview(),
+          fetchVideos(),
+          fetchNotifications(),
+          fetchActivity(),
+        ]);
       } catch (err) {
         updateStatus(err.message, 'error');
         toast(err.message, 'error');
@@ -622,8 +495,7 @@
           shortOnly: Boolean(shortOnly?.checked),
         };
         saveFilters();
-        await fetchVideos();
-        await fetchNotifications();
+        await Promise.all([fetchVideos(), fetchNotifications()]);
       });
     });
   };
@@ -650,18 +522,16 @@
     document.getElementById('btn-load')?.addEventListener('click', async () => {
       await Promise.all([fetchOverview(), fetchVideos(), fetchNotifications(), fetchActivity()]);
     });
-    document.getElementById('btn-load-overview')?.addEventListener('click', async () => {
+    const overviewButtons = [
+      document.getElementById('btn-load-overview'),
+      document.getElementById('btn-load-overview-secondary'),
+    ].filter(Boolean);
+
+    overviewButtons.forEach((btn) => btn.addEventListener('click', async () => {
       await Promise.all([fetchOverview(), fetchNotifications()]);
-    });
+    }));
     document.getElementById('btn-activity')?.addEventListener('click', fetchActivity);
-      await fetchVideos();
-      await fetchNotifications();
-    });
-    document.getElementById('btn-logout')?.addEventListener('click', () => {
-      localStorage.removeItem('trendScopeToken');
-      document.getElementById('dashboard')?.classList.add('d-none');
-      document.getElementById('login-screen')?.classList.remove('d-none');
-    });
+    document.getElementById('btn-logout')?.addEventListener('click', logout);
   };
 
   const restoreSession = async () => {
@@ -674,11 +544,9 @@
       loadFilters();
       applyFiltersToForm();
       await Promise.all([fetchOverview(), fetchVideos(), fetchNotifications(), fetchActivity()]);
-      await fetchVideos();
-      await fetchNotifications();
     } catch (err) {
       console.warn('Session expirée', err.message);
-      localStorage.removeItem('trendScopeToken');
+      logout();
     }
   };
 
@@ -693,18 +561,10 @@
     bindFilters();
     bindButtons();
     bindTableActions();
+    updateStatus(
+      'Connexion prête. Les identifiants seront validés côté serveur Supabase avant ouverture du tableau de bord.',
+      'success'
+    );
     await restoreSession();
-      updateStatus(
-        'Connexion prête. Les identifiants seront validés côté serveur Supabase avant ouverture du tableau de bord.',
-        'success'
-      );
-    });
-  };
-
-  document.addEventListener('DOMContentLoaded', () => {
-    setFullHeight();
-    window.addEventListener('resize', setFullHeight);
-    initPasswordToggle();
-    handleLogin();
   });
 })();
