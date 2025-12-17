@@ -50,6 +50,12 @@ create table if not exists public.videos (
   thumbnail_url text,
   duration text,
   published_at timestamptz,
+  region text,
+  category text,
+  language text,
+  is_short boolean not null default false,
+  status text not null default 'active',
+  used_at timestamptz,
   created_at timestamptz not null default timezone('utc', now()),
   unique (youtube_id)
 );
@@ -91,6 +97,12 @@ select
   v.channel_title,
   v.thumbnail_url,
   v.published_at,
+  v.region,
+  v.category,
+  v.language,
+  v.is_short,
+  v.status,
+  v.used_at,
   latest.views,
   latest.likes,
   latest.comments,
@@ -124,4 +136,5 @@ left join lateral (
 ) previous on true;
 ```
 
+After running the SQL, set `SUPABASE_URL` and `SUPABASE_ANON_KEY` in your Vercel project so the client loads without the “Supabase client is not available” error. Optional: create Supabase Auth users if you want to add authentication later, but the current dashboard is publicly accessible for rapid validation.
 After running the SQL, add a Supabase Auth user (email/password) for dashboard login or configure `ADMIN_USER`/`ADMIN_PASSWORD` on the frontend so the fallback login works. Also be sure to set `SUPABASE_URL` and `SUPABASE_ANON_KEY` in your Vercel project so the client loads without the “Supabase client is not available” error.
