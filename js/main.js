@@ -516,6 +516,15 @@
   }
 
 
+  function hasLocalSession() {
+    try {
+      return Boolean(localStorage.getItem(LOCAL_SESSION_KEY));
+    } catch {
+      return false;
+    }
+  }
+
+
   function persistLocalSession(identifier) {
     try {
       localStorage.setItem(LOCAL_SESSION_KEY, JSON.stringify({ user: identifier, createdAt: Date.now() }));
@@ -673,6 +682,13 @@
     state.dashboardLoaded = true;
   }
 
+
+    const normalized = normalizeVideos(videos);
+    updateState(normalized, source);
+    renderDashboard();
+    state.dashboardLoaded = true;
+  }
+
   async function initAuthFlow() {
     if (dom.loginForm) {
       dom.loginForm.addEventListener("submit", handleLogin);
@@ -681,6 +697,15 @@
     if (allowed) {
       await loadDashboard();
     }
+  }
+
+  function init() {
+    wireEvents();
+    initAuthFlow().catch((error) => {
+      showFeedback(error.message || "Failed to initialize authentication.");
+    });
+  }
+
 
   async function loadDashboard() {
     setShell("dashboard");

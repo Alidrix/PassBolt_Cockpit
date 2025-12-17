@@ -48,6 +48,12 @@ create table if not exists public.videos (
   duration text,
   published_at timestamptz,
   created_at timestamptz not null default timezone('utc', now()),
+  region text,
+  category text,
+  language text,
+  is_short boolean not null default false,
+  status text not null default 'active',
+  used_at timestamptz,
   unique(youtube_id)
 );
 
@@ -56,6 +62,12 @@ alter table public.videos add column if not exists channel_title text default ''
 alter table public.videos add column if not exists thumbnail_url text;
 alter table public.videos add column if not exists duration text;
 alter table public.videos add column if not exists published_at timestamptz;
+alter table public.videos add column if not exists region text;
+alter table public.videos add column if not exists category text;
+alter table public.videos add column if not exists language text;
+alter table public.videos add column if not exists is_short boolean not null default false;
+alter table public.videos add column if not exists status text not null default 'active';
+alter table public.videos add column if not exists used_at timestamptz;
 
 create table if not exists public.stats_snapshots (
   id bigint generated always as identity primary key,
@@ -94,6 +106,12 @@ select
   v.channel_title,
   v.thumbnail_url,
   v.published_at,
+  v.region,
+  v.category,
+  v.language,
+  v.is_short,
+  v.status,
+  v.used_at,
   latest.views,
   latest.likes,
   latest.comments,

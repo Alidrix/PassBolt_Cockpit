@@ -1,31 +1,85 @@
 <!doctype html>
-<html lang="en">
+<html lang="fr">
   <head>
-    <title>TheTrendScope Dashboard</title>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
-
-    <link href="https://fonts.googleapis.com/css?family=Inter:300,400,500,600,700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/font-awesome/4.7.0/css/font-awesome.min.css">
-    <link rel="stylesheet" href="css/style.css">
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TheTrendScope · Radar viral</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+    <link rel="stylesheet" href="css/dashboard.css" />
   </head>
-  <body class="dashboard-body">
-    <nav class="navbar navbar-expand-lg navbar-dark dashboard-nav">
-      <div class="container-fluid">
-        <div class="d-flex align-items-center">
-          <div class="brand-dot mr-2"></div>
-          <span class="navbar-brand mb-0 h4">TheTrendScope</span>
+  <body>
+    <header>
+      <div class="header-inner">
+        <div class="brand">
+          <img src="UPDATE_LOGO.png" alt="TheTrendScope" style="width:36px;height:36px;border-radius:12px;object-fit:cover" />
+          <span>Trending Radar</span>
         </div>
-        <div class="ml-auto d-flex align-items-center">
-          <div class="text-light small mr-3 threshold-text">Alerts trigger when views/hr ≥ 500,000</div>
-          <button id="alertPanelToggle" class="btn btn-sm btn-outline-light position-relative">
-            <span class="mr-2">Alerts</span>
-            <span class="badge badge-danger badge-pill" id="alert-count-badge">0</span>
-          </button>
+        <div class="actions">
+          <button class="btn secondary" id="refresh-stats-btn"><i class="fa fa-chart-line"></i> Rafraîchir les stats</button>
+          <button class="btn" id="refresh-btn"><i class="fa fa-refresh"></i> Rafraîchir</button>
         </div>
       </div>
-    </nav>
+    </header>
 
+    <main>
+      <section class="notification-center">
+        <h3>Notifications</h3>
+        <div class="notifications"></div>
+      </section>
+
+      <section class="controls">
+        <div class="control">
+          <label for="filter-category">Catégorie</label>
+          <select id="filter-category">
+            <option value="all">Toutes</option>
+            <option value="nourriture">nourriture</option>
+            <option value="voiture">voiture</option>
+            <option value="business">business</option>
+            <option value="drôle">drôle</option>
+            <option value="influenceurs">influenceurs</option>
+            <option value="gaming">gaming</option>
+            <option value="sport">sport</option>
+            <option value="musique">musique</option>
+          </select>
+        </div>
+        <div class="control">
+          <label for="filter-region">Région</label>
+          <select id="filter-region">
+            <option value="all">Toutes</option>
+            <option value="FR">FR</option>
+            <option value="US">US</option>
+            <option value="ES">ES</option>
+            <option value="Global">Global</option>
+          </select>
+        </div>
+        <div class="control">
+          <label for="filter-language">Langue</label>
+          <select id="filter-language">
+            <option value="all">Toutes</option>
+            <option value="fr">fr</option>
+            <option value="en">en</option>
+            <option value="es">es</option>
+          </select>
+        </div>
+      </section>
+
+      <section id="video-grid" class="grid"></section>
+
+      <section class="notification-center" id="history-section">
+        <h3>Historique</h3>
+        <div class="notifications" id="history-list"></div>
+      </section>
+    </main>
+
+    <div class="toast-container"></div>
+
+    <div class="page-loader">
+      <div class="panel">
+        <div class="loader"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div>
+        Mise à jour des tendances…
     <main id="dashboard-shell" class="d-none">
       <div class="container-fluid py-4">
         <div class="row">
@@ -81,6 +135,23 @@
       </div>
     </main>
 
+    <div id="preview-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:50;align-items:center;justify-content:center;padding:20px;">
+      <div style="max-width:960px;width:100%;background:#0f172a;border-radius:16px;border:1px solid rgba(255,255,255,0.08);box-shadow:0 24px 60px rgba(0,0,0,0.5);overflow:hidden;position:relative;">
+        <button id="preview-close" style="position:absolute;top:10px;right:10px;background:rgba(255,255,255,0.08);border:none;color:#fff;border-radius:10px;padding:6px 10px;cursor:pointer;">
+          <i class="fa fa-times"></i>
+        </button>
+        <div style="padding:16px 16px 0;color:#e5e7eb;">
+          <h3 id="preview-title" style="margin:0 0 10px;">Prévisualisation</h3>
+        </div>
+        <div style="position:relative;padding-top:56.25%;">
+          <iframe id="preview-frame" src="" allowfullscreen style="position:absolute;top:0;left:0;width:100%;height:100%;border:0;"></iframe>
+        </div>
+      </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.48.0/dist/umd/supabase.min.js" integrity="sha256-3qDl1n2YNDdNYsM8oFb6kP3UjObb8VcS3EWAaAqsxPQ=" crossorigin="anonymous"></script>
+    <script src="js/supabaseClient.js"></script>
+    <script src="js/dashboard.js"></script>
     <section id="login-shell" class="img js-fullheight" style="background-image: url(images/bg.jpg);">
       <div class="ftco-section">
         <div class="container">
