@@ -15,6 +15,7 @@ Radar en temps réel pour détecter les vidéos YouTube les plus virales (FR/US/
 - 🌗 **Theme toggle** : clair/sombre, navbar glass, badges soft, loader overlay, toasts.
 - ▶️ **Prévisualisation** : modal d’embed YouTube.
 - 📦 **Supabase ready** : Synchro `videos` et `video_history` via REST (service role). Repli local sur `data/store.json` si les variables d’environnement ne sont pas définies.
+- 📦 **Supabase ready** : Synchro `videos`, `video_history`, `admins` via REST (service role). Repli local sur `data/store.json` si les variables d’environnement ne sont pas définies.
 
 ## 🏗️ Structure
 
@@ -38,6 +39,19 @@ SUPABASE_URL=
 SUPABASE_SERVICE_ROLE_KEY=
 PORT=4443
 ```
+
+Créer un fichier `.env` à la racine (le repo en contient déjà un exemple) :
+
+```
+SUPABASE_URL=https://ltxjjnzsphhprykuwwye.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=...clef_service...
+YOUTUBE_API_KEY=...clef_youtube...
+ADMIN_USER=zakamon
+ADMIN_PASSWORD=4GS49PFJ$64@Nr*eXEPa9z%4
+PORT=4443
+```
+
+> 🔒 **Identifiants admin** : la connexion UI vérifie d’abord la table `admins` de Supabase, puis le repli local défini dans `.env`. Les sessions sont stockées en mémoire (entête `x-session-token`).
 
 ### Tables Supabase (SQL à exécuter)
 
@@ -71,13 +85,25 @@ create table if not exists public.video_history (
   like_count bigint,
   recorded_at timestamptz default now()
 );
+
+create table if not exists public.admins (
+  id uuid default uuid_generate_v4() primary key,
+  username text unique not null,
+  password text not null,
+  created_at timestamptz default now()
+);
+
+insert into public.admins (username, password)
+values ('zakamon', '4GS49PFJ$64@Nr*eXEPa9z%4')
+on conflict (username) do update set password = excluded.password;
 ```
 
 ## ▶️ Lancer en local
 
 1) Installer Node.js (>=18). Aucun paquet externe n’est nécessaire.
 
-2) Renseigner `.env` avec votre clé YouTube (Supabase en option).
+2a) Renseigner `.env` avec votre clé YouTube (Supabase en option).
+2b) Renseigner `.env` avec vos clés Supabase et YouTube.
 
 3) Démarrer :
 ```bash
@@ -86,11 +112,13 @@ npm start
 ```
 
 4) Lancez les rafraîchissements directement depuis l’UI (aucune authentification requise).
+4) Connectez-vous via l’UI (identifiants Supabase `admins`).
 
 ## 🔌 API résumée
 
 | Méthode | Route | Description |
 | --- | --- | --- |
+| `POST` | `/api/login` | Auth admin → `{ token }` (header `x-session-token`). |
 | `GET` | `/api/videos` | Liste des vidéos suivies (velocity desc). |
 | `POST` | `/api/refresh` | Rafraîchit les tendances (pays/catégorie/langue, seuil alerte). |
 | `POST` | `/api/refresh-stats` | Met à jour vues/likes de toutes les vidéos suivies. |

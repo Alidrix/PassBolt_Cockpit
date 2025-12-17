@@ -10,6 +10,8 @@ const PORT = process.env.PORT || 4443;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY;
+const ADMIN_USER = process.env.ADMIN_USER || 'zakamon';
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'changemeStrong16!';
 
 const DATA_PATH = path.join(__dirname, 'data', 'store.json');
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -28,6 +30,9 @@ const categoryMap = {
 const languageRegion = { fr: 'FR', en: 'US', es: 'ES' };
 
 let store = loadStore();
+const sessions = new Map();
+let store = loadStore();
+ensureDefaultAdmin();
 hydrateFromSupabase();
 
 function loadEnv() {
@@ -52,6 +57,7 @@ function loadStore() {
     console.error('Impossible de charger le store local', err);
   }
   return { videos: [], history: [], notifications: [] };
+  return { videos: [], history: [], notifications: [], admins: [] };
 }
 
 function saveStore() {
@@ -59,6 +65,14 @@ function saveStore() {
     fs.writeFileSync(DATA_PATH, JSON.stringify(store, null, 2));
   } catch (err) {
     console.error('Erreur de sauvegarde locale', err);
+  }
+}
+
+function ensureDefaultAdmin() {
+  const exists = store.admins.find((a) => a.username === ADMIN_USER);
+  if (!exists) {
+    store.admins.push({ username: ADMIN_USER, password: ADMIN_PASSWORD });
+    saveStore();
   }
 }
 
@@ -84,6 +98,7 @@ function respondJson(res, status, payload) {
     'Content-Type': 'application/json',
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Headers': 'Content-Type'
+    'Access-Control-Allow-Headers': 'Content-Type, x-session-token'
   });
   res.end(JSON.stringify(payload));
 }
@@ -103,6 +118,43 @@ function parseBody(req) {
       }
     });
   });
+}
+
+function requireAuth(req, res) {
+  const token = req.headers['x-session-token'];
+  if (!token || !sessions.has(token)) {
+    respondJson(res, 401, { error: 'Authentification requise' });
+    return false;
+  }
+  return true;
+}
+
+async function checkAdminCredentials(username, password) {
+  if (!username || !password) return false;
+  const local = store.admins.find((a) => a.username === username && a.password === password);
+  if (local) return true;
+  if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
+    try {
+      const params = new url.URLSearchParams({
+        select: 'id,username',
+        username: `eq.${username}`,
+        password: `eq.${password}`,
+        limit: '1'
+      });
+      const resp = await fetch(`${SUPABASE_URL}/rest/v1/admins?${params.toString()}`, {
+        headers: {
+          apikey: SUPABASE_SERVICE_ROLE_KEY,
+          Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`
+        }
+      });
+      if (!resp.ok) return false;
+      const data = await resp.json();
+      return Array.isArray(data) && data.length > 0;
+    } catch (err) {
+      console.error('Erreur Supabase (admins)', err);
+    }
+  }
+  return false;
 }
 
 function serveStatic(req, res, pathname) {
@@ -295,6 +347,7 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(204, {
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Headers': 'Content-Type',
+      'Access-Control-Allow-Headers': 'Content-Type, x-session-token',
       'Access-Control-Allow-Methods': 'GET,POST,OPTIONS'
     });
     res.end();
@@ -303,12 +356,22 @@ const server = http.createServer(async (req, res) => {
 
   if (serveStatic(req, res, pathname)) return;
 
+  if (pathname === '/api/login' && req.method === 'POST') {
+    const body = await parseBody(req);
+    const valid = await checkAdminCredentials(body.username, body.password);
+    if (!valid) return respondJson(res, 401, { error: 'Identifiants invalides' });
+    const token = crypto.randomUUID();
+    sessions.set(token, { username: body.username, createdAt: Date.now() });
+    return respondJson(res, 200, { token });
+  }
+
   if (pathname === '/api/videos' && req.method === 'GET') {
     const videos = [...store.videos].sort((a, b) => (b.velocity_per_hour || 0) - (a.velocity_per_hour || 0));
     return respondJson(res, 200, { videos });
   }
 
   if (pathname === '/api/refresh' && req.method === 'POST') {
+    if (!requireAuth(req, res)) return;
     const body = await parseBody(req);
     try {
       const freshVideos = await fetchTrending(body);
@@ -339,6 +402,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (pathname === '/api/refresh-stats' && req.method === 'POST') {
+    if (!requireAuth(req, res)) return;
     try {
       const updates = await refreshStatsForIds(store.videos.map((v) => v.id));
       updates.forEach((u) => {
@@ -358,6 +422,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (pathname.startsWith('/api/videos/') && pathname.endsWith('/note') && req.method === 'POST') {
+    if (!requireAuth(req, res)) return;
     const id = pathname.split('/')[3];
     const body = await parseBody(req);
     const video = store.videos.find((v) => v.id === id);
@@ -369,6 +434,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (pathname.startsWith('/api/videos/') && pathname.endsWith('/mark-used') && req.method === 'POST') {
+    if (!requireAuth(req, res)) return;
     const id = pathname.split('/')[3];
     const video = store.videos.find((v) => v.id === id);
     if (!video) return respondJson(res, 404, { error: 'Vidéo introuvable' });
@@ -380,6 +446,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (pathname.startsWith('/api/videos/') && pathname.endsWith('/refresh') && req.method === 'POST') {
+    if (!requireAuth(req, res)) return;
     const id = pathname.split('/')[3];
     try {
       const [update] = await refreshStatsForIds([id]);
