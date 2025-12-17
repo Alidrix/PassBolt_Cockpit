@@ -24,6 +24,12 @@ function resolveSupabaseClient() {
 }
 
 const supabase = resolveSupabaseClient();
+const { createClient } = window.supabase || {};
+const supabase =
+  window.supabaseClient ||
+  (createClient && window.SUPABASE_URL && window.SUPABASE_ANON_KEY
+    ? createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY)
+    : null);
 const LOCAL_SESSION_KEY = 'trendscope.local.session';
 
 const state = {
@@ -285,6 +291,8 @@ async function requireSession() {
   const client = resolveSupabaseClient();
   if (!client) return false;
   const { data, error } = await client.auth.getSession();
+  if (!supabase) return false;
+  const { data, error } = await supabase.auth.getSession();
   if (error) {
     console.warn('Unable to check Supabase session', error);
     return false;
