@@ -12,6 +12,7 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
   <body>
+<body>
   <div class="page">
     <header class="nav">
       <div class="brand">
@@ -26,6 +27,36 @@
         <div class="chip">YouTube API</div>
       </div>
     </header>
+
+        <div>
+          <p class="eyebrow">The Trend Scope</p>
+          <h1>Radar viral YouTube</h1>
+        </div>
+      </div>
+      <div class="nav-actions">
+        <button id="themeToggle" class="ghost">🌗 Thème</button>
+        <div class="chip" id="sessionStatus">Hors ligne</div>
+      </div>
+    </header>
+
+    <section class="panel auth" id="authPanel">
+      <div>
+        <p class="eyebrow">Connexion admin</p>
+        <h2>Authentification forte</h2>
+        <p class="muted">Identifiants stockés dans Supabase. Nécessaires pour lancer les rafraîchissements et enregistrer des notes.</p>
+      </div>
+      <form id="loginForm" class="form-grid">
+        <label class="input">
+          <span>Utilisateur</span>
+          <input type="text" id="username" placeholder="zakamon" required />
+        </label>
+        <label class="input">
+          <span>Mot de passe</span>
+          <input type="password" id="password" placeholder="Mot de passe" required />
+        </label>
+        <button type="submit" class="primary">Se connecter</button>
+      </form>
+    </section>
 
     <section class="panel actions">
       <div>
