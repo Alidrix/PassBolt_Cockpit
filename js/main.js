@@ -80,6 +80,32 @@
     passwordToggle: document.querySelector(".toggle-password"),
   };
 
+  const DEFAULT_SUPABASE_URL = "https://ltxjjnzsphhprykuwwye.supabase.co";
+  const DEFAULT_SUPABASE_ANON_KEY =
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imx0eGpqbnpzcGhocHJ5a3V3d3llIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQ3ODgyMDYsImV4cCI6MjA4MDM2NDIwNn0.AR4MHCGyhBDpX3BTBIqQh0qap6tOLUHfuP8HMofF3Sk";
+
+  function resolveSupabaseClient() {
+    const url =
+      window.SUPABASE_URL ||
+      (typeof SUPABASE_URL !== "undefined" ? SUPABASE_URL : "") ||
+      DEFAULT_SUPABASE_URL;
+    const key =
+      window.SUPABASE_ANON_KEY ||
+      (typeof SUPABASE_ANON_KEY !== "undefined" ? SUPABASE_ANON_KEY : "") ||
+      DEFAULT_SUPABASE_ANON_KEY;
+
+    window.SUPABASE_URL = url;
+    window.SUPABASE_ANON_KEY = key;
+
+    if (window.supabaseClient) return window.supabaseClient;
+    if (window.supabase && typeof window.supabase.createClient === "function" && url && key) {
+      window.supabaseClient = window.supabase.createClient(url, key);
+      return window.supabaseClient;
+    }
+    return null;
+  }
+
+  let supabaseClient = resolveSupabaseClient();
   const supabaseClient =
     window.supabaseClient ||
     (window.supabase && window.SUPABASE_URL && window.SUPABASE_ANON_KEY
@@ -416,6 +442,34 @@
     toast.addEventListener("hidden.bs.toast", () => toast.remove());
   }
 
+
+  function showToast(message, variant) {
+    if (!dom.toastContainer || !message) return;
+    const intent = variant || "info";
+    const toastId = `toast-${Date.now()}`;
+    const toast = document.createElement("div");
+    toast.className = `toast align-items-center text-white bg-${intent} border-0`;
+    toast.setAttribute("role", "alert");
+    toast.setAttribute("aria-live", "assertive");
+    toast.setAttribute("aria-atomic", "true");
+    toast.dataset.delay = "3000";
+    toast.id = toastId;
+    toast.innerHTML = `
+      <div class="d-flex">
+        <div class="toast-body">${message}</div>
+        <button type="button" class="ml-2 mb-1 close text-white" data-dismiss="toast" aria-label="Close">
+          <span aria-hidden="true">&times;</span>
+        </button>
+      </div>
+    `;
+    dom.toastContainer.appendChild(toast);
+    // @ts-ignore bootstrap toast
+    $(toast).toast({ delay: 3000 });
+    // @ts-ignore bootstrap toast
+    $(toast).toast("show");
+    toast.addEventListener("hidden.bs.toast", () => toast.remove());
+  }
+
   function setLoading(isLoading) {
     if (!dom.loginForm) return;
     const formControls = dom.loginForm.querySelectorAll("input, button, a");
@@ -461,6 +515,23 @@
     }
   }
 
+
+  function persistLocalSession(identifier) {
+    try {
+      localStorage.setItem(LOCAL_SESSION_KEY, JSON.stringify({ user: identifier, createdAt: Date.now() }));
+    } catch (e) {
+      console.warn("Unable to persist local session", e);
+    }
+  }
+
+  function hasLocalSession() {
+    try {
+      return Boolean(localStorage.getItem(LOCAL_SESSION_KEY));
+    } catch {
+      return false;
+    }
+  }
+
   async function restorePersistedSession() {
     if (!supabaseClient) return;
     try {
@@ -489,6 +560,7 @@
   }
 
   async function guardAccess() {
+    supabaseClient = resolveSupabaseClient();
     if (!supabaseClient && !hasLocalSession()) {
       showFeedback("Client Supabase indisponible.");
       setShell("login");
@@ -539,6 +611,7 @@
         return;
       }
 
+      supabaseClient = resolveSupabaseClient();
       if (!supabaseClient) {
         showFeedback("Supabase client is not available.");
         return;
@@ -568,6 +641,46 @@
       setLoading(false);
     }
   }
+
+  async function loadDashboard() {
+    setShell("dashboard");
+    setStatus("Chargement des vidéos en cours…", "info");
+    wireEvents();
+
+    let videos = [];
+    let source = "Supabase";
+
+    try {
+      supabaseClient = resolveSupabaseClient();
+      videos = await fetchVideosFromSupabase();
+      if (!videos.length) {
+        setStatus("Aucune vidéo Supabase. Affichage des données de secours.", "warning");
+        videos = fallbackVideos;
+        source = "fallback";
+      } else {
+        clearStatus();
+      }
+    } catch (error) {
+      console.error("Failed to load videos from Supabase", error);
+      setStatus("Supabase request failed; showing cached sample data.", "warning");
+      videos = fallbackVideos;
+      source = "fallback";
+    }
+
+    const normalized = normalizeVideos(videos);
+    updateState(normalized, source);
+    renderDashboard();
+    state.dashboardLoaded = true;
+  }
+
+  async function initAuthFlow() {
+    if (dom.loginForm) {
+      dom.loginForm.addEventListener("submit", handleLogin);
+    }
+    const allowed = await guardAccess();
+    if (allowed) {
+      await loadDashboard();
+    }
 
   async function loadDashboard() {
     setShell("dashboard");

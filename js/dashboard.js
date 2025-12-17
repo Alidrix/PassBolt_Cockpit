@@ -1,3 +1,29 @@
+const DEFAULT_SUPABASE_URL = 'https://ltxjjnzsphhprykuwwye.supabase.co';
+const DEFAULT_SUPABASE_ANON_KEY =
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imx0eGpqbnpzcGhocHJ5a3V3d3llIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQ3ODgyMDYsImV4cCI6MjA4MDM2NDIwNn0.AR4MHCGyhBDpX3BTBIqQh0qap6tOLUHfuP8HMofF3Sk';
+
+function resolveSupabaseClient() {
+  const url =
+    window.SUPABASE_URL ||
+    (typeof SUPABASE_URL !== 'undefined' ? SUPABASE_URL : '') ||
+    DEFAULT_SUPABASE_URL;
+  const key =
+    window.SUPABASE_ANON_KEY ||
+    (typeof SUPABASE_ANON_KEY !== 'undefined' ? SUPABASE_ANON_KEY : '') ||
+    DEFAULT_SUPABASE_ANON_KEY;
+
+  window.SUPABASE_URL = url;
+  window.SUPABASE_ANON_KEY = key;
+
+  if (window.supabaseClient) return window.supabaseClient;
+  if (window.supabase && window.supabase.createClient && url && key) {
+    window.supabaseClient = window.supabase.createClient(url, key);
+    return window.supabaseClient;
+  }
+  return null;
+}
+
+const supabase = resolveSupabaseClient();
 const { createClient } = window.supabase || {};
 const supabase =
   window.supabaseClient ||
@@ -262,6 +288,9 @@ async function requireSession() {
   } catch (e) {
     console.warn('Unable to read local session', e);
   }
+  const client = resolveSupabaseClient();
+  if (!client) return false;
+  const { data, error } = await client.auth.getSession();
   if (!supabase) return false;
   const { data, error } = await supabase.auth.getSession();
   if (error) {
