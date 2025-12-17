@@ -15,6 +15,7 @@ let historyChart;
 const $ = (q) => document.querySelector(q);
 const toastEl = $('#toast');
 const loaderEl = $('#loader');
+const faviconEl = document.querySelector('#favicon');
 
 function toggleTheme() {
   const root = document.documentElement;
@@ -33,6 +34,60 @@ function setLoading(isLoading) {
   loaderEl.classList.toggle('hidden', !isLoading);
 }
 
+function buildFaviconFrames() {
+  if (!faviconEl) return [];
+  const frames = [];
+  const size = 96;
+  const center = size / 2;
+  const bg = '#00ff00';
+  const ring = '#22cfe6';
+  const dots = '#222222';
+  const dotCount = 8;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+
+  for (let step = 0; step < 12; step++) {
+    ctx.clearRect(0, 0, size, size);
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, size, size);
+    ctx.strokeStyle = ring;
+    ctx.lineWidth = 10;
+    ctx.beginPath();
+    ctx.arc(center, center, 28, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.fillStyle = ring;
+    ctx.beginPath();
+    ctx.arc(center, center, 12, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = dots;
+    for (let i = 0; i < dotCount; i++) {
+      const angle = ((step * 30) + (i * (360 / dotCount))) * (Math.PI / 180);
+      const x = center + Math.cos(angle) * 40;
+      const y = center + Math.sin(angle) * 40;
+      ctx.beginPath();
+      ctx.arc(x, y, 8, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    frames.push(canvas.toDataURL('image/png'));
+  }
+  return frames;
+}
+
+function startFaviconAnimation() {
+  const frames = buildFaviconFrames();
+  if (!frames.length) return;
+  let idx = 0;
+  faviconEl.href = frames[0];
+  setInterval(() => {
+    idx = (idx + 1) % frames.length;
+    faviconEl.href = frames[idx];
+  }, 120);
+}
+
+async function fetchJson(url, options = {}) {
+  return fetch(url, options);
 async function fetchJson(url, options = {}) {
   return fetch(url, options);
   const headers = options.headers || {};
@@ -346,6 +401,10 @@ async function bootstrap() {
   restoreTheme();
   renderCategoryChips();
   bindEvents();
+  startFaviconAnimation();
+  await refreshVideos();
+  await loadHistory();
+  await loadNotifications();
   await refreshVideos();
   await loadHistory();
   await loadNotifications();
