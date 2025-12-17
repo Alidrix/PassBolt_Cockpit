@@ -9,6 +9,7 @@ const categories = [
   'musique'
 ];
 
+let sessionToken = localStorage.getItem('trendScopeSession') || '';
 let historyChart;
 
 const $ = (q) => document.querySelector(q);
@@ -34,6 +35,11 @@ function setLoading(isLoading) {
 
 async function fetchJson(url, options = {}) {
   return fetch(url, options);
+  const headers = options.headers || {};
+  if (sessionToken) {
+    headers['x-session-token'] = sessionToken;
+  }
+  return fetch(url, { ...options, headers });
 }
 
 function renderCategoryChips() {
@@ -52,6 +58,41 @@ function renderCategoryChips() {
     if (cat === 'tout') chip.classList.add('primary');
     container.appendChild(chip);
   });
+}
+
+function updateSessionStatus(label, ok) {
+  const badge = $('#sessionStatus');
+  badge.textContent = label;
+  badge.classList.toggle('ghost', !ok);
+}
+
+async function login(e) {
+  e.preventDefault();
+  setLoading(true);
+  try {
+    const res = await fetch('/api/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        username: $('#username').value,
+        password: $('#password').value
+      })
+    });
+    if (!res.ok) throw new Error('Identifiants invalides');
+    const data = await res.json();
+    sessionToken = data.token;
+    localStorage.setItem('trendScopeSession', sessionToken);
+    updateSessionStatus('Connecté', true);
+    showToast('Session ouverte');
+    await refreshVideos();
+    await loadHistory();
+    await loadNotifications();
+  } catch (err) {
+    console.error(err);
+    showToast(err.message || 'Erreur de connexion');
+  } finally {
+    setLoading(false);
+  }
 }
 
 async function refreshTrends() {
@@ -308,6 +349,12 @@ async function bootstrap() {
   await refreshVideos();
   await loadHistory();
   await loadNotifications();
+  if (sessionToken) {
+    updateSessionStatus('Session mémorisée', true);
+    await refreshVideos();
+    await loadHistory();
+    await loadNotifications();
+  }
 }
 
 bootstrap();
