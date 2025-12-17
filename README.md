@@ -102,8 +102,8 @@ on conflict (username) do update set password = excluded.password;
 
 1) Installer Node.js (>=18). Aucun paquet externe n’est nécessaire.
 
-2) Renseigner `.env` avec votre clé YouTube (Supabase en option).
-2) Renseigner `.env` avec vos clés Supabase et YouTube.
+2a) Renseigner `.env` avec votre clé YouTube (Supabase en option).
+2b) Renseigner `.env` avec vos clés Supabase et YouTube.
 
 3) Démarrer :
 ```bash
