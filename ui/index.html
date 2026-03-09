@@ -77,6 +77,16 @@
       showToast('Import terminé');
     }
 
+    async function importFallback(form) {
+      appendLog('INFO', 'Endpoint /import-stream indisponible (404), fallback vers /import');
+      const response = await fetch('/import', { method: 'POST', body: form });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.error || 'Erreur import');
+      }
+      renderResults(payload);
+    }
+
     uploadBtn.addEventListener('click', async () => {
       const file = fileInput.files[0];
       if (!file) {
@@ -96,6 +106,10 @@
 
       try {
         const response = await fetch('/import-stream', { method: 'POST', body: form });
+        if (response.status === 404) {
+          await importFallback(form);
+          return;
+        }
         if (!response.ok || !response.body) {
           const message = await response.text();
           throw new Error(message || 'Réponse invalide');

@@ -54,3 +54,15 @@ Puis relancez :
 docker compose down
 docker compose up -d --build
 ```
+
+
+### Dépannage rapide
+
+- Si vous voyez `404 Not Found` sur `/import-stream`, vos conteneurs tournent probablement avec une ancienne image/config. Relancez avec rebuild :
+
+```bash
+docker compose down
+docker compose up -d --build
+```
+
+- L'UI bascule automatiquement sur `/import` si `/import-stream` est indisponible, mais sans logs temps réel.
