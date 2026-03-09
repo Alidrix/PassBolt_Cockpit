@@ -5,19 +5,21 @@ services:
     build: ./api
     container_name: passbolt-import-api
     ports:
-      - "9090:9090"
+      - "${IMPORTER_API_PORT:-9090}:9090"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - PASSBOLT_CONTAINER=${PASSBOLT_CONTAINER:-passbolt-passbolt-1}
       - PASSBOLT_CLI_PATH=${PASSBOLT_CLI_PATH:-/usr/share/php/passbolt/bin/cake}
+      - IMPORT_TOTAL_TIMEOUT=${IMPORT_TOTAL_TIMEOUT:-60}
     restart: unless-stopped
 
   importer-ui:
     image: nginx:alpine
     container_name: passbolt-import-ui
     ports:
-      - "9091:80"
+      - "${IMPORTER_UI_PORT:-9091}:80"
     volumes:
       - ./ui:/usr/share/nginx/html:ro
+      - ./ui/nginx.conf:/etc/nginx/conf.d/default.conf:ro
     restart: unless-stopped

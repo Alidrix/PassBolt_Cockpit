@@ -16,6 +16,7 @@
     th, td { text-align: left; border-bottom: 1px solid #415a77; padding: 8px; }
     .ok { color: #70e000; }
     .ko { color: #ff6b6b; }
+    .logs { margin-top: 10px; background: #0a1422; border: 1px solid #415a77; border-radius: 8px; padding: 10px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; height: 220px; overflow-y: auto; white-space: pre-wrap; }
     #toast { position: fixed; right: 16px; bottom: 16px; background: #1b263b; border: 1px solid #415a77; padding: 10px 12px; border-radius: 8px; display: none; }
   </style>
 </head>
@@ -29,6 +30,8 @@
       <button id="uploadBtn">Importer</button>
       <div class="progress"><div id="bar" class="bar"></div></div>
       <p id="summary" class="muted"></p>
+      <h3>Commandes & logs</h3>
+      <div id="logs" class="logs"></div>
     </div>
 
     <div class="card">
@@ -49,11 +52,99 @@
     const summary = document.getElementById('summary');
     const bar = document.getElementById('bar');
     const toast = document.getElementById('toast');
+    const logsBox = document.getElementById('logs');
+    const REQUEST_TIMEOUT_MS = 60000;
 
     function showToast(message) {
       toast.textContent = message;
       toast.style.display = 'block';
       setTimeout(() => { toast.style.display = 'none'; }, 2500);
+    }
+
+    function appendLog(prefix, message) {
+      logsBox.textContent += `[${new Date().toLocaleTimeString()}] ${prefix} ${message}\n`;
+      logsBox.scrollTop = logsBox.scrollHeight;
+    }
+
+    function renderResults(payload) {
+      const rows = payload.results || [];
+      rows.forEach((row) => {
+        const ok = row.returncode === 0;
+        const detail = row.stderr || row.stdout || '-';
+        resultsBody.insertAdjacentHTML('beforeend', `<tr><td>${row.email || ''}</td><td class="${ok ? 'ok' : 'ko'}">${ok ? 'OK' : 'ERREUR'}</td><td>${detail}</td></tr>`);
+      });
+      summary.textContent = `Import terminé: ${payload.success || 0}/${payload.total || 0}`;
+      bar.style.width = '100%';
+      showToast('Import terminé');
+    }
+
+    async function parseJsonResponse(response) {
+      const contentType = response.headers.get('content-type') || '';
+      const body = await response.text();
+
+      if (!contentType.includes('application/json')) {
+        const clean = body.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+        throw new Error(clean || `Réponse non JSON (HTTP ${response.status})`);
+      }
+
+      try {
+        return JSON.parse(body);
+      } catch (_) {
+        throw new Error(`JSON invalide reçu du serveur (HTTP ${response.status})`);
+      }
+    }
+
+    async function importFallback(form, signal) {
+      appendLog('INFO', 'Endpoint /import-stream indisponible (404), fallback vers /import');
+      const response = await fetch('/import', { method: 'POST', body: form, signal });
+      try {
+        const payload = await parseJsonResponse(response);
+        if (!response.ok) {
+          throw new Error(payload.error || `Erreur import (HTTP ${response.status})`);
+        }
+        renderResults(payload);
+      } catch (error) {
+        if (response.status >= 500) {
+          appendLog('ERR', 'Le endpoint /import répond en 500 (API probablement ancienne ou en erreur).');
+          appendLog('DBG', 'Action recommandée: docker compose down && docker compose up -d --build');
+        }
+        throw error;
+      }
+    }
+
+
+    async function pingApi() {
+      const response = await fetch('/health');
+      const payload = await parseJsonResponse(response);
+      if (!response.ok) {
+        throw new Error(payload.error || 'Healthcheck API en erreur');
+      }
+      appendLog('INFO', `Ping API OK | container=${payload.container} | cli=${payload.cli_path}`);
+      return payload;
+    }
+
+    async function runAutoDebug() {
+      appendLog('INFO', 'Auto-debug déclenché');
+      try {
+        const response = await fetch('/debug/import');
+        if (response.status === 404) {
+          appendLog('DBG', 'Endpoint /debug/import indisponible sur cette version API.');
+          const healthResp = await fetch('/health');
+          const healthPayload = await parseJsonResponse(healthResp);
+          appendLog('DBG', `Health status=${healthPayload.status} container=${healthPayload.container} cli=${healthPayload.cli_path}`);
+          appendLog('DBG', 'Action recommandée: mettre à jour/rebuild l'API pour activer /debug/import et /import-stream.');
+          return;
+        }
+        const payload = await parseJsonResponse(response);
+        const checks = payload?.diagnostics?.checks || [];
+        checks.forEach((check) => {
+          appendLog('DBG', `${check.name}: ${check.ok ? 'OK' : 'KO'} ${check.selected || ''}`.trim());
+        });
+        const recommendations = payload?.diagnostics?.recommendations || [];
+        recommendations.forEach((item) => appendLog('DBG', `Reco: ${item}`));
+      } catch (error) {
+        appendLog('ERR', `Auto-debug impossible: ${error.message || String(error)}`);
+      }
     }
 
     uploadBtn.addEventListener('click', async () => {
@@ -63,27 +154,87 @@
         return;
       }
 
-      bar.style.width = '20%';
+      uploadBtn.disabled = true;
+      bar.style.width = '10%';
       resultsBody.innerHTML = '';
+      logsBox.textContent = '';
       summary.textContent = 'Import en cours...';
+      appendLog('INFO', `Fichier: ${file.name}`);
 
       const form = new FormData();
       form.append('file', file);
 
-      const response = await fetch('http://'+location.hostname+':9090/import', { method: 'POST', body: form });
-      bar.style.width = '80%';
-      const payload = await response.json();
+      let timer = null;
 
-      const rows = payload.results || [];
-      rows.forEach((row) => {
-        const ok = row.returncode === 0;
-        const detail = row.stderr || row.stdout || '-';
-        resultsBody.insertAdjacentHTML('beforeend', `<tr><td>${row.email || ''}</td><td class="${ok ? 'ok' : 'ko'}">${ok ? 'OK' : 'ERREUR'}</td><td>${detail}</td></tr>`);
-      });
+      try {
+        await pingApi();
 
-      summary.textContent = `Import terminé: ${payload.success || 0}/${payload.total || 0}`;
-      bar.style.width = '100%';
-      showToast(response.ok ? 'Import terminé' : 'Erreur import');
+        const controller = new AbortController();
+        timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+        const response = await fetch('/import-stream', { method: 'POST', body: form, signal: controller.signal });
+        if (response.status === 404) {
+          await importFallback(form, controller.signal);
+          return;
+        }
+        if (!response.ok || !response.body) {
+          const message = await response.text();
+          throw new Error(message || 'Réponse invalide');
+        }
+
+        bar.style.width = '30%';
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let finalPayload = null;
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) {
+            break;
+          }
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed) continue;
+            if (!trimmed.startsWith('{')) {
+              throw new Error(`Flux non JSON reçu: ${trimmed.slice(0, 160)}`);
+            }
+            const entry = JSON.parse(trimmed);
+            if (entry.type === 'command') appendLog('CMD', entry.message);
+            if (entry.type === 'stdout') appendLog('OUT', entry.message);
+            if (entry.type === 'stderr') appendLog('ERR', entry.message);
+            if (entry.type === 'log') appendLog('INFO', entry.message);
+            if (entry.type === 'final') finalPayload = entry.payload;
+          }
+          bar.style.width = '75%';
+        }
+
+        if (finalPayload) {
+          clearTimeout(timer);
+          renderResults(finalPayload);
+        } else {
+          throw new Error('Aucun résultat final reçu');
+        }
+      } catch (error) {
+        if (error.name === 'AbortError') {
+          appendLog('ERR', `Timeout global atteint (${REQUEST_TIMEOUT_MS / 1000}s)`);
+          summary.textContent = 'Import timeout (debug automatique lancé)';
+          await runAutoDebug();
+        } else {
+          appendLog('ERR', error.message || String(error));
+          summary.textContent = 'Import interrompu (voir logs)';
+          await runAutoDebug();
+        }
+        showToast('Erreur import');
+        bar.style.width = '100%';
+      } finally {
+        if (timer) clearTimeout(timer);
+        uploadBtn.disabled = false;
+      }
     });
   </script>
 </body>
