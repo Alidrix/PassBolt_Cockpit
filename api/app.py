@@ -9,6 +9,7 @@ from flask import Flask, jsonify, request
 app = Flask(__name__)
 
 PASSBOLT_CONTAINER = os.getenv("PASSBOLT_CONTAINER", "passbolt-passbolt-1")
+PASSBOLT_CLI_PATH = os.getenv("PASSBOLT_CLI_PATH", "/usr/share/php/passbolt/bin/cake")
 
 SAFE_FIELD = re.compile(r"^[A-Za-z0-9@._+\-']+$")
 SAFE_ROLE = {"user", "admin"}
@@ -45,7 +46,7 @@ def create_user(email: str, first: str, last: str, role: str) -> dict[str, Any]:
         "/bin/bash",
         "-c",
         (
-            "/usr/share/php/passbolt/bin/cake passbolt register_user "
+            f"{PASSBOLT_CLI_PATH} passbolt register_user "
             f"-u {email} -f {first} -l {last} -r {role}"
         ),
         "www-data",
@@ -62,7 +63,7 @@ def create_user(email: str, first: str, last: str, role: str) -> dict[str, Any]:
 
 @app.route("/health", methods=["GET"])
 def health() -> Any:
-    return jsonify({"status": "ok", "container": PASSBOLT_CONTAINER})
+    return jsonify({"status": "ok", "container": PASSBOLT_CONTAINER, "cli_path": PASSBOLT_CLI_PATH})
 
 
 @app.route("/import", methods=["POST"])
