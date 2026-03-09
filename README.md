@@ -22,6 +22,10 @@ sudo docker compose up -d
 ## Variables d'environnement
 
 - `PASSBOLT_CONTAINER` (défaut: `passbolt-passbolt-1`) : nom du conteneur Passbolt cible.
+<<<<<<< codex/setup-passbolt-user-importer-with-docker-f5513v
+- `PASSBOLT_CLI_PATH` (défaut: `/usr/share/php/passbolt/bin/cake`) : chemin vers la commande `cake` dans le conteneur Passbolt.
+=======
+>>>>>>> main
 
 ## Format CSV attendu
 
