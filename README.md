@@ -1,6 +1,12 @@
-# Passbolt User Importer
+# Passbolt CSV Import Platform (CLI-based)
 
-Projet Dockerisé (backend FastAPI + frontend + Nginx) pour importer des utilisateurs Passbolt via CSV.
+Architecture retenue (plus stable):
+
+```
+CSV Import UI -> API Service -> Passbolt CLI container
+```
+
+L'import repose sur la CLI officielle Passbolt (`cake passbolt register_user`), sans flux API JWT/GPG.
 
 ## Lancement
 
@@ -8,20 +14,24 @@ Projet Dockerisé (backend FastAPI + frontend + Nginx) pour importer des utilisa
 sudo docker compose up -d
 ```
 
-Application disponible sur `http://<serveur>:9001`.
+## Services
 
-## Variables importantes
+- `importer-ui` : interface web d'import CSV sur `http://<host>:9091`
+- `importer-api` : API Flask sur `http://<host>:9090`
 
-- `PASSBOLT_URL` : URL du serveur Passbolt.
-- `PASSBOLT_USER_ID` : UUID de l'admin qui réalise l'auth API (défaut: `27147404-1ef4-45ef-9a82-a53f5407d10f`).
-- `PASSBOLT_PRIVATE_KEY_PATH` : chemin de la clé privée GPG dans le conteneur backend (par défaut `/etc/passbolt/gpg/serverkey_private.asc`).
-- `PASSBOLT_GPG_PASSPHRASE` : passphrase de la clé privée.
-- `PASSBOLT_TOKEN` : JWT statique optionnel (bypass de l'auth challenge/signature).
+## Variables d'environnement
 
-## Format CSV
+- `PASSBOLT_CONTAINER` (défaut: `passbolt-passbolt-1`) : nom du conteneur Passbolt cible.
 
-Le fichier CSV doit contenir les colonnes suivantes :
+## Format CSV attendu
 
-- `Email`
-- `FirstName`
-- `LastName`
+```csv
+email,firstname,lastname,role
+user1@example.com,Jean,Dupont,user
+user2@example.com,Marie,Durand,admin
+```
+
+## Endpoint API
+
+- `POST /import` : envoie un `multipart/form-data` avec `file=<csv>`.
+- `GET /health` : vérification rapide du service.
