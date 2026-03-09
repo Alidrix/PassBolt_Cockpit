@@ -70,7 +70,7 @@
       const form = new FormData();
       form.append('file', file);
 
-      const response = await fetch('http://'+location.hostname+':9090/import', { method: 'POST', body: form });
+      const response = await fetch('/import', { method: 'POST', body: form });
       bar.style.width = '80%';
       const payload = await response.json();
 
