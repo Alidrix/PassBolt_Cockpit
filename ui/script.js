@@ -2,6 +2,8 @@ const fileInput = document.getElementById('file');
 const uploadBtn = document.getElementById('uploadBtn');
 const rollbackInput = document.getElementById('rollbackOnError');
 const resultsBody = document.getElementById('results');
+const usersRows = document.getElementById('usersRows');
+const usersEmpty = document.getElementById('usersEmpty');
 const summary = document.getElementById('summary');
 const finalSummary = document.getElementById('finalSummary');
 const bar = document.getElementById('bar');
@@ -9,6 +11,10 @@ const progressPercent = document.getElementById('progressPercent');
 const progressStage = document.getElementById('progressStage');
 const toast = document.getElementById('toast');
 const logsBox = document.getElementById('logs');
+const menuItems = document.querySelectorAll('.menu-item');
+const viewSections = document.querySelectorAll('.view-section');
+
+let latestResults = [];
 
 function setToastType(type = 'info') {
   toast.className = `toast toast-${type}`;
@@ -20,6 +26,22 @@ function showToast(message, type = 'info') {
   toast.style.display = 'block';
   setTimeout(() => { toast.style.display = 'none'; }, 2500);
 }
+
+function switchView(viewId) {
+  viewSections.forEach((section) => {
+    section.classList.toggle('active-view', section.id === viewId);
+  });
+  menuItems.forEach((item) => {
+    item.classList.toggle('active', item.dataset.view === viewId);
+  });
+}
+
+menuItems.forEach((item) => {
+  item.addEventListener('click', (event) => {
+    event.preventDefault();
+    switchView(item.dataset.view);
+  });
+});
 
 function appendLog(prefix, message) {
   logsBox.textContent += `[${new Date().toLocaleTimeString()}] ${prefix} ${message}\n`;
@@ -60,9 +82,35 @@ function escapeHtml(text) {
   return (text || '').replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]));
 }
 
+function renderUsersPanel() {
+  usersRows.innerHTML = '';
+  if (!latestResults.length) {
+    usersEmpty.style.display = 'block';
+    return;
+  }
+
+  usersEmpty.style.display = 'none';
+  latestResults.forEach((row) => {
+    const groups = (row.groups_assigned && row.groups_assigned.length)
+      ? row.groups_assigned
+      : (row.groups_requested || []);
+
+    usersRows.insertAdjacentHTML('beforeend', `
+      <tr>
+        <td>${escapeHtml(row.email)}</td>
+        <td>${escapeHtml(row.raw?.command?.includes('-r admin') ? 'admin' : 'user')}</td>
+        <td>${statusBadge(row.user_create_status === 'success' && row.groups_deferred?.length ? 'deferred' : row.user_create_status)}</td>
+        <td>${escapeHtml(groups.join(', '))}</td>
+      </tr>
+    `);
+  });
+}
+
 function renderImportResults(payload) {
   resultsBody.innerHTML = '';
   const rows = payload.results || [];
+  latestResults = rows;
+
   rows.forEach((row) => {
     const detail = [
       row.errors && row.errors.length ? `Erreurs: ${row.errors.join(' | ')}` : '',
@@ -89,6 +137,8 @@ function renderImportResults(payload) {
     <li>Assignations différées: <strong>${sum.groups_deferred || 0}</strong></li>
     <li>Erreurs: <strong>${sum.errors || 0}</strong></li>
   `;
+
+  renderUsersPanel();
   summary.textContent = `Import ${payload.status} — ${payload.success}/${payload.total}`;
 }
 
@@ -101,6 +151,7 @@ uploadBtn.addEventListener('click', async () => {
   logsBox.textContent = '';
   finalSummary.innerHTML = '';
   setProgress(5, 'preview');
+  switchView('importView');
 
   const form = new FormData();
   form.append('file', file);
