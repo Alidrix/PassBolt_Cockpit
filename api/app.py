@@ -2,6 +2,7 @@ import csv
 import json
 import os
 import re
+import shlex
 import subprocess
 import time
 from typing import Any
@@ -131,17 +132,24 @@ def create_user(email: str, first: str, last: str, role: str, container: str, cl
     last = _sanitize_value("lastname", last)
     role = _sanitize_role(role)
 
-    shell_command = f"{cli_path} passbolt register_user -u {email} -f {first} -l {last} -r {role}"
+    shell_command = (
+        f"{shlex.quote(cli_path)} passbolt register_user "
+        f"-u {shlex.quote(email)} "
+        f"-f {shlex.quote(first)} "
+        f"-l {shlex.quote(last)} "
+        f"-r {shlex.quote(role)}"
+    )
 
     command = [
         "docker",
         "exec",
         container,
         "su",
-        "-s",
-        "/bin/bash",
+        "-m",
         "-c",
         shell_command,
+        "-s",
+        "/bin/sh",
         "www-data",
     ]
 
