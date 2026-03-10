@@ -15,9 +15,9 @@
         <span>Importer</span>
       </div>
       <nav class="menu">
-        <a class="menu-item active" href="#">Import CSV</a>
-        <a class="menu-item" href="#">Utilisateurs</a>
-        <a class="menu-item" href="#">Logs</a>
+        <a class="menu-item active" href="#" data-view="importView">Import CSV</a>
+        <a class="menu-item" href="#" data-view="usersView">Utilisateurs</a>
+        <a class="menu-item" href="#" data-view="logsView">Logs</a>
       </nav>
     </aside>
 
@@ -29,37 +29,56 @@
         </div>
       </header>
 
-      <section class="card">
-        <p class="muted">CSV supporté: <code>email,firstname,lastname,role</code> ou <code>email,firstname,lastname,role,groups</code> (groupes séparés par <code>;</code>).</p>
-        <div class="controls-row">
-          <input type="file" id="file" accept=".csv" />
-          <label class="check"><input type="checkbox" id="rollbackOnError" /> Rollback si erreur</label>
-          <button id="uploadBtn" class="btn-primary">Importer</button>
-        </div>
+      <section id="importView" class="view-section active-view">
+        <section class="card">
+          <p class="muted">CSV supporté: <code>email,firstname,lastname,role</code> ou <code>email,firstname,lastname,role,groups</code> (groupes séparés par <code>;</code>).</p>
+          <div class="controls-row">
+            <input type="file" id="file" accept=".csv" />
+            <label class="check"><input type="checkbox" id="rollbackOnError" /> Rollback si erreur</label>
+            <button id="uploadBtn" class="btn-primary">Importer</button>
+          </div>
 
-        <div class="progress"><div id="bar" class="bar"></div></div>
-        <div class="progress-meta">
-          <span id="progressPercent">0%</span>
-          <span id="progressStage" class="stage">Prévalidation</span>
-        </div>
-        <p id="summary" class="muted"></p>
+          <div class="progress"><div id="bar" class="bar"></div></div>
+          <div class="progress-meta">
+            <span id="progressPercent">0%</span>
+            <span id="progressStage" class="stage">Prévalidation</span>
+          </div>
+          <p id="summary" class="muted"></p>
+        </section>
 
-        <h3>Logs</h3>
-        <div id="logs" class="logs"></div>
+        <section class="card grid-two">
+          <div>
+            <h3>Résultats import</h3>
+            <table>
+              <thead><tr><th>Email</th><th>Status</th><th>Groupes demandés</th><th>Détails</th></tr></thead>
+              <tbody id="results"></tbody>
+            </table>
+          </div>
+          <div>
+            <h3>Résumé final</h3>
+            <ul id="finalSummary" class="summary-list"></ul>
+          </div>
+        </section>
       </section>
 
-      <section class="card grid-two">
-        <div>
-          <h3>Résultats import</h3>
+      <section id="usersView" class="view-section">
+        <section class="card">
+          <h3>Utilisateurs (dernier import)</h3>
           <table>
-            <thead><tr><th>Email</th><th>Status</th><th>Groupes demandés</th><th>Détails</th></tr></thead>
-            <tbody id="results"></tbody>
+            <thead>
+              <tr><th>Email</th><th>Rôle</th><th>Statut</th><th>Groupes</th></tr>
+            </thead>
+            <tbody id="usersRows"></tbody>
           </table>
-        </div>
-        <div>
-          <h3>Résumé final</h3>
-          <ul id="finalSummary" class="summary-list"></ul>
-        </div>
+          <p id="usersEmpty" class="muted">Aucun import exécuté pour le moment.</p>
+        </section>
+      </section>
+
+      <section id="logsView" class="view-section">
+        <section class="card">
+          <h3>Logs d'import</h3>
+          <div id="logs" class="logs"></div>
+        </section>
       </section>
     </main>
   </div>
