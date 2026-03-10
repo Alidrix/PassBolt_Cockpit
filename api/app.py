@@ -15,6 +15,8 @@ PASSBOLT_CONTAINER = os.getenv("PASSBOLT_CONTAINER", "passbolt-passbolt-1")
 PASSBOLT_CLI_PATH = os.getenv("PASSBOLT_CLI_PATH", "/usr/share/php/passbolt/bin/cake")
 IMPORT_COMMAND_TIMEOUT = int(os.getenv("IMPORT_COMMAND_TIMEOUT", "60"))
 IMPORT_TOTAL_TIMEOUT = int(os.getenv("IMPORT_TOTAL_TIMEOUT", "60"))
+
+# Important: utiliser "docker" via le PATH, pas /usr/bin/docker en dur
 DOCKER_BIN = os.getenv("DOCKER_BIN", "docker")
 DOCKER_COMMAND_PREFIX = [DOCKER_BIN]
 
@@ -51,9 +53,12 @@ def _detect_container() -> str:
     code, out, _ = _run_command(_docker_command("ps", "--format", "{{.Names}}"), timeout=10)
     if code != 0:
         return PASSBOLT_CONTAINER
+
     names = [line.strip() for line in out.splitlines() if line.strip()]
+
     if PASSBOLT_CONTAINER in names:
         return PASSBOLT_CONTAINER
+
     candidates = [n for n in names if "passbolt" in n and "db" not in n and "traefik" not in n]
     return candidates[0] if candidates else PASSBOLT_CONTAINER
 
@@ -228,6 +233,7 @@ def _process_rows(rows: list[dict[str, str]], container: str, cli_path: str, emi
         email = row.get("email", "")
         if emit:
             emit({"type": "log", "message": f"[{index}/{len(rows)}] Start: {email}"})
+
         try:
             result = create_user(
                 email,
@@ -239,13 +245,16 @@ def _process_rows(rows: list[dict[str, str]], container: str, cli_path: str, emi
             )
             if emit:
                 emit({"type": "command", "message": result["command"]})
-                if result.get("stdout"):
-                    emit({"type": "stdout", "message": result["stdout"]})
-                if result.get("stderr"):
-                    emit({"type": "stderr", "message": result["stderr"]})
+            if result.get("stdout"):
+                emit({"type": "stdout", "message": result["stdout"]})
+            if result.get("stderr"):
+                emit({"type": "stderr", "message": result["stderr"]})
+
             if result["returncode"] == 0:
                 success += 1
+
             results.append(result)
+
         except Exception as error:
             message = str(error)
             if emit:
@@ -280,9 +289,11 @@ def import_csv() -> Any:
     rows, error = _parse_rows()
     if error:
         return error
+
     diagnostics = diagnose_environment()
     container = diagnostics.get("resolved_container", PASSBOLT_CONTAINER)
     cli_path = diagnostics.get("resolved_cli_path", PASSBOLT_CLI_PATH)
+
     payload = _process_rows(rows, container, cli_path)
     payload["diagnostics"] = diagnostics
     return jsonify(payload)
@@ -317,6 +328,7 @@ def import_csv_stream() -> Any:
 
             email = row.get("email", "")
             yield json.dumps({"type": "log", "message": f"[{index}/{len(rows)}] Start: {email}"}, ensure_ascii=False) + "\n"
+
             try:
                 result = create_user(
                     email,
@@ -327,13 +339,17 @@ def import_csv_stream() -> Any:
                     cli_path,
                 )
                 yield json.dumps({"type": "command", "message": result["command"]}, ensure_ascii=False) + "\n"
+
                 if result.get("stdout"):
                     yield json.dumps({"type": "stdout", "message": result["stdout"]}, ensure_ascii=False) + "\n"
                 if result.get("stderr"):
                     yield json.dumps({"type": "stderr", "message": result["stderr"]}, ensure_ascii=False) + "\n"
+
                 if result["returncode"] == 0:
                     success += 1
+
                 results.append(result)
+
             except Exception as error:
                 message = str(error)
                 yield json.dumps({"type": "stderr", "message": message}, ensure_ascii=False) + "\n"
