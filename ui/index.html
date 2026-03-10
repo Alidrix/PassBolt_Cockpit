@@ -4,56 +4,67 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Passbolt CSV Import</title>
+  <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg" />
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
-  <div class="wrap">
-    <h2>Passbolt CSV Importer</h2>
-    <p class="muted">CSV supporté: <code>email,firstname,lastname,role</code> ou <code>email,firstname,lastname,role,groups</code> avec groupes séparés par <code>;</code>.</p>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand-mini">
+        <img src="/assets/logo-mark.svg" alt="Passbolt" />
+        <span>Importer</span>
+      </div>
+      <nav class="menu">
+        <a class="menu-item active" href="#">Import CSV</a>
+        <a class="menu-item" href="#">Utilisateurs</a>
+        <a class="menu-item" href="#">Logs</a>
+      </nav>
+    </aside>
 
-    <div class="card">
-      <input type="file" id="file" accept=".csv" />
-      <label><input type="checkbox" id="rollbackOnError" /> Rollback si erreur</label>
-      <div style="margin-top: 10px;">
-        <button id="previewBtn">Prévisualiser</button>
-        <button id="uploadBtn">Importer</button>
-      </div>
-      <div class="progress"><div id="bar" class="bar"></div></div>
-      <div class="progress-meta">
-        <span id="progressPercent">0%</span>
-        <span id="progressStage" class="stage">Prévalidation</span>
-      </div>
-      <p id="summary" class="muted"></p>
-      <h3>Logs</h3>
-      <div id="logs" class="logs"></div>
-    </div>
+    <main class="main-content">
+      <header class="navbar card">
+        <div class="brand-full">
+          <img src="/assets/logo-full.svg" alt="Passbolt" />
+          <h1>CSV Importer</h1>
+        </div>
+      </header>
 
-    <div class="card">
-      <h3>Prévisualisation</h3>
-      <table>
-        <thead>
-          <tr><th>Ligne</th><th>Email</th><th>Prénom</th><th>Nom</th><th>Rôle</th><th>Groupes</th><th>Validité</th><th>Erreurs</th></tr>
-        </thead>
-        <tbody id="previewRows"></tbody>
-      </table>
-    </div>
+      <section class="card">
+        <p class="muted">CSV supporté: <code>email,firstname,lastname,role</code> ou <code>email,firstname,lastname,role,groups</code> (groupes séparés par <code>;</code>).</p>
+        <div class="controls-row">
+          <input type="file" id="file" accept=".csv" />
+          <label class="check"><input type="checkbox" id="rollbackOnError" /> Rollback si erreur</label>
+          <button id="uploadBtn" class="btn-primary">Importer</button>
+        </div>
 
-    <div class="card grid-two">
-      <div>
-        <h3>Résultats import</h3>
-        <table>
-          <thead><tr><th>Email</th><th>Status</th><th>Groupes demandés</th><th>Détails</th></tr></thead>
-          <tbody id="results"></tbody>
-        </table>
-      </div>
-      <div>
-        <h3>Résumé final</h3>
-        <ul id="finalSummary" class="summary-list"></ul>
-      </div>
-    </div>
+        <div class="progress"><div id="bar" class="bar"></div></div>
+        <div class="progress-meta">
+          <span id="progressPercent">0%</span>
+          <span id="progressStage" class="stage">Prévalidation</span>
+        </div>
+        <p id="summary" class="muted"></p>
+
+        <h3>Logs</h3>
+        <div id="logs" class="logs"></div>
+      </section>
+
+      <section class="card grid-two">
+        <div>
+          <h3>Résultats import</h3>
+          <table>
+            <thead><tr><th>Email</th><th>Status</th><th>Groupes demandés</th><th>Détails</th></tr></thead>
+            <tbody id="results"></tbody>
+          </table>
+        </div>
+        <div>
+          <h3>Résumé final</h3>
+          <ul id="finalSummary" class="summary-list"></ul>
+        </div>
+      </section>
+    </main>
   </div>
 
-  <div id="toast"></div>
+  <div id="toast" class="toast toast-info"></div>
   <script src="/script.js"></script>
 </body>
 </html>

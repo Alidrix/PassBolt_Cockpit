@@ -1,9 +1,7 @@
 const fileInput = document.getElementById('file');
-const previewBtn = document.getElementById('previewBtn');
 const uploadBtn = document.getElementById('uploadBtn');
 const rollbackInput = document.getElementById('rollbackOnError');
 const resultsBody = document.getElementById('results');
-const previewBody = document.getElementById('previewRows');
 const summary = document.getElementById('summary');
 const finalSummary = document.getElementById('finalSummary');
 const bar = document.getElementById('bar');
@@ -12,9 +10,12 @@ const progressStage = document.getElementById('progressStage');
 const toast = document.getElementById('toast');
 const logsBox = document.getElementById('logs');
 
-let lastPreview = null;
+function setToastType(type = 'info') {
+  toast.className = `toast toast-${type}`;
+}
 
-function showToast(message) {
+function showToast(message, type = 'info') {
+  setToastType(type);
   toast.textContent = message;
   toast.style.display = 'block';
   setTimeout(() => { toast.style.display = 'none'; }, 2500);
@@ -40,6 +41,11 @@ function setProgress(percent, stage = 'preview') {
   bar.style.width = `${Math.max(0, Math.min(100, percent))}%`;
   progressPercent.textContent = `${Math.round(percent)}%`;
   progressStage.textContent = stageLabel(stage);
+  if (stage === 'done') {
+    bar.classList.add('done');
+  } else {
+    bar.classList.remove('done');
+  }
 }
 
 function statusBadge(status) {
@@ -52,31 +58,6 @@ function statusBadge(status) {
 
 function escapeHtml(text) {
   return (text || '').replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]));
-}
-
-async function fetchJson(url, options = {}) {
-  const res = await fetch(url, options);
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-  return data;
-}
-
-function renderPreview(preview) {
-  previewBody.innerHTML = '';
-  preview.rows.forEach((row) => {
-    previewBody.insertAdjacentHTML('beforeend', `
-      <tr>
-        <td>${row.line}</td>
-        <td>${escapeHtml(row.email)}</td>
-        <td>${escapeHtml(row.firstname)}</td>
-        <td>${escapeHtml(row.lastname)}</td>
-        <td>${escapeHtml(row.role)}</td>
-        <td>${escapeHtml((row.groups || []).join('; '))}</td>
-        <td>${row.valid ? '<span class="badge badge-success">valide</span>' : '<span class="badge badge-error">invalide</span>'}</td>
-        <td>${escapeHtml((row.errors || []).join(' | '))}</td>
-      </tr>
-    `);
-  });
 }
 
 function renderImportResults(payload) {
@@ -111,38 +92,9 @@ function renderImportResults(payload) {
   summary.textContent = `Import ${payload.status} — ${payload.success}/${payload.total}`;
 }
 
-previewBtn.addEventListener('click', async () => {
-  const file = fileInput.files[0];
-  if (!file) return showToast('Sélectionne un CSV');
-
-  const form = new FormData();
-  form.append('file', file);
-  previewBtn.disabled = true;
-
-  try {
-    const preview = await fetchJson('/preview', { method: 'POST', body: form });
-    lastPreview = preview;
-    renderPreview(preview);
-    summary.textContent = `Preview: ${preview.valid_rows}/${preview.total_rows} lignes valides`;
-    appendLog('INFO', `Preview OK: ${preview.valid_rows} valides, ${preview.invalid_rows} invalides`);
-    if (preview.valid_rows === 0) {
-      uploadBtn.disabled = true;
-      showToast('Import bloqué: 100% des lignes sont invalides');
-    } else {
-      uploadBtn.disabled = false;
-    }
-  } catch (error) {
-    appendLog('ERR', error.message || String(error));
-    showToast('Erreur preview');
-  } finally {
-    previewBtn.disabled = false;
-  }
-});
-
 uploadBtn.addEventListener('click', async () => {
   const file = fileInput.files[0];
-  if (!file) return showToast('Sélectionne un CSV');
-  if (lastPreview && lastPreview.valid_rows === 0) return showToast('Aucune ligne valide à importer');
+  if (!file) return showToast('Sélectionne un CSV', 'warning');
 
   uploadBtn.disabled = true;
   resultsBody.innerHTML = '';
@@ -183,14 +135,16 @@ uploadBtn.addEventListener('click', async () => {
         if (event.type === 'final') {
           setProgress(100, 'done');
           renderImportResults(event.payload);
-          showToast('Import terminé');
+          showToast('Import terminé', 'success');
         }
       }
     }
   } catch (error) {
     appendLog('ERR', error.message || String(error));
     summary.textContent = 'Import interrompu';
-    showToast('Erreur import');
+    setProgress(100, 'done');
+    bar.classList.remove('done');
+    showToast('Erreur import', 'error');
   } finally {
     uploadBtn.disabled = false;
   }
