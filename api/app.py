@@ -15,6 +15,7 @@ PASSBOLT_CONTAINER = os.getenv("PASSBOLT_CONTAINER", "passbolt-passbolt-1")
 PASSBOLT_CLI_PATH = os.getenv("PASSBOLT_CLI_PATH", "/usr/share/php/passbolt/bin/cake")
 IMPORT_COMMAND_TIMEOUT = int(os.getenv("IMPORT_COMMAND_TIMEOUT", "60"))
 IMPORT_TOTAL_TIMEOUT = int(os.getenv("IMPORT_TOTAL_TIMEOUT", "60"))
+DOCKER_COMMAND_PREFIX = ["/usr/bin/docker"]
 
 SAFE_FIELD = re.compile(r"^[A-Za-z0-9@._+\-']+$")
 SAFE_ROLE = {"user", "admin"}
@@ -23,6 +24,10 @@ SAFE_ROLE = {"user", "admin"}
 def _run_command(command: list[str], timeout: int = 10) -> tuple[int, str, str]:
     run = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
     return run.returncode, run.stdout.strip(), run.stderr.strip()
+
+
+def _docker_command(*args: str) -> list[str]:
+    return [*DOCKER_COMMAND_PREFIX, *args]
 
 
 def _sanitize_value(name: str, value: str) -> str:
@@ -42,7 +47,7 @@ def _sanitize_role(value: str) -> str:
 
 
 def _detect_container() -> str:
-    code, out, _ = _run_command(["docker", "ps", "--format", "{{.Names}}"], timeout=10)
+    code, out, _ = _run_command(_docker_command("ps", "--format", "{{.Names}}"), timeout=10)
     if code != 0:
         return PASSBOLT_CONTAINER
     names = [line.strip() for line in out.splitlines() if line.strip()]
@@ -59,7 +64,7 @@ def _detect_cli_path(container: str) -> str:
         "/var/www/passbolt/bin/cake",
     ]
     for path in candidates:
-        code, _, _ = _run_command(["docker", "exec", container, "test", "-x", path], timeout=10)
+        code, _, _ = _run_command(_docker_command("exec", container, "test", "-x", path), timeout=10)
         if code == 0:
             return path
     return PASSBOLT_CLI_PATH
@@ -74,7 +79,7 @@ def diagnose_environment() -> dict[str, Any]:
     }
 
     try:
-        code, out, err = _run_command(["docker", "ps", "--format", "{{.Names}}"], timeout=10)
+        code, out, err = _run_command(_docker_command("ps", "--format", "{{.Names}}"), timeout=10)
         if code != 0:
             diagnostics["checks"].append({"name": "docker_ps", "ok": False, "stderr": err})
             diagnostics["recommendations"].append("docker ps ne répond pas dans le conteneur API")
@@ -141,9 +146,7 @@ def create_user(email: str, first: str, last: str, role: str, container: str, cl
     )
 
     command = [
-        "docker",
-        "exec",
-        container,
+        *_docker_command("exec", container),
         "su",
         "-m",
         "-c",
