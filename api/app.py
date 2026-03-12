@@ -6,6 +6,7 @@ import re
 import shlex
 import time
 import uuid
+from urllib.parse import urljoin
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from threading import Lock
@@ -675,18 +676,22 @@ class PassboltApiAuthService:
     def enabled(self) -> bool:
         return bool(self.config_status().get("configured"))
 
-    def _extract_server_public_key(self, payload: dict[str, Any]) -> str:
+    def _log_auth_event(self, level: str, message: str, **payload: Any) -> None:
+        _save_live_log("auth", level, message, event_code="auth.debug", payload=payload or None)
+
+    def _extract_server_public_key_from_payload(self, payload: dict[str, Any]) -> str | None:
         candidates: list[Any] = [payload, payload.get("body") if isinstance(payload, dict) else None]
         for candidate in candidates:
             if isinstance(candidate, dict):
-                for key in ("public_key", "server_public_key", "armored_key"):
-                    value = candidate.get(key)
-                    if isinstance(value, str) and "BEGIN PGP PUBLIC KEY BLOCK" in value:
-                        return value
                 fingerprint = candidate.get("fingerprint")
                 if isinstance(fingerprint, str) and fingerprint:
                     self._server_fingerprint = fingerprint
-        raise RuntimeError("Unable to retrieve Passbolt server public key")
+                for key in ("public_key", "server_public_key", "armored_key", "key"):
+                    value = candidate.get(key)
+                    if isinstance(value, str) and "BEGIN PGP PUBLIC KEY BLOCK" in value:
+                        self._log_auth_event("info", "Server public key found inline in /auth/verify.json payload", source_key=key)
+                        return value
+        return None
 
     def _request_json(self, method: str, path: str, json_payload: dict[str, Any] | None = None) -> tuple[int, dict[str, Any], str]:
         response = self._session.request(
@@ -704,6 +709,79 @@ class PassboltApiAuthService:
             data = {}
         return response.status_code, data, response.text[:500]
 
+    def _fetch_server_public_key(self) -> str:
+        verify_url = f"{self.base_url}/auth/verify.json"
+        self._log_auth_event("info", "Calling Passbolt auth verify endpoint", url=verify_url)
+
+        try:
+            response = self._session.get(
+                verify_url,
+                timeout=self.timeout,
+                verify=self.verify_setting,
+                headers={"Accept": "application/json"},
+            )
+        except requests.RequestException as error:
+            message = _classify_request_error(error)
+            self._log_auth_event("error", "Failed to call /auth/verify.json", error=message)
+            raise RuntimeError(f"Unable to call /auth/verify.json: {message}") from error
+
+        self._log_auth_event("info", "Received /auth/verify.json response", status_code=response.status_code)
+
+        payload: dict[str, Any] = {}
+        try:
+            payload = response.json() if response.text else {}
+        except Exception:
+            payload = {}
+
+        if response.status_code >= 400:
+            error_msg = (response.text or "")[:500]
+            self._log_auth_event("error", "Passbolt /auth/verify.json returned an error", status_code=response.status_code, body=error_msg)
+            raise RuntimeError(error_msg or f"Unable to call /auth/verify.json HTTP {response.status_code}")
+
+        pubkey_header = (response.headers.get("X-GPGAuth-Pubkey") or "").strip()
+        self._log_auth_event(
+            "info",
+            "Checked X-GPGAuth-Pubkey header",
+            header_present=bool(pubkey_header),
+            header_value=pubkey_header or None,
+        )
+
+        if pubkey_header:
+            pubkey_url = urljoin(f"{self.base_url}/", pubkey_header)
+            self._log_auth_event("info", "Downloading server public key from X-GPGAuth-Pubkey URL", pubkey_url=pubkey_url)
+            try:
+                pubkey_response = self._session.get(
+                    pubkey_url,
+                    timeout=self.timeout,
+                    verify=self.verify_setting,
+                    headers={"Accept": "text/plain, application/pgp-keys, application/octet-stream"},
+                )
+            except requests.RequestException as error:
+                message = _classify_request_error(error)
+                self._log_auth_event("error", "Failed to download server public key from header URL", pubkey_url=pubkey_url, error=message)
+                raise RuntimeError(f"Unable to download Passbolt server public key from {pubkey_url}: {message}") from error
+
+            self._log_auth_event("info", "Server public key URL response received", pubkey_url=pubkey_url, status_code=pubkey_response.status_code)
+            if pubkey_response.status_code >= 400:
+                body = (pubkey_response.text or "")[:500]
+                self._log_auth_event("error", "Server public key URL returned an error", pubkey_url=pubkey_url, status_code=pubkey_response.status_code, body=body)
+                raise RuntimeError(f"Unable to download Passbolt server public key from {pubkey_url} HTTP {pubkey_response.status_code}: {body}")
+
+            pubkey_text = (pubkey_response.text or "").strip()
+            if "BEGIN PGP PUBLIC KEY BLOCK" in pubkey_text:
+                self._log_auth_event("info", "Server public key downloaded successfully", pubkey_url=pubkey_url)
+                return pubkey_text
+
+            self._log_auth_event("error", "Downloaded server public key does not contain an armored PGP key", pubkey_url=pubkey_url)
+            raise RuntimeError(f"Downloaded Passbolt server public key is invalid from {pubkey_url}")
+
+        inline_pubkey = self._extract_server_public_key_from_payload(payload)
+        if inline_pubkey:
+            return inline_pubkey
+
+        self._log_auth_event("error", "Unable to locate Passbolt server public key in verify header or payload", payload_keys=list(payload.keys()) if isinstance(payload, dict) else [])
+        raise RuntimeError("Unable to retrieve Passbolt server public key: X-GPGAuth-Pubkey missing and no inline key found")
+
     def _get_gpg(self) -> gnupg.GPG:
         gpg = gnupg.GPG(gnupghome="/tmp/gnupg-api")
         if not self.private_key_path or not os.path.exists(self.private_key_path):
@@ -717,10 +795,13 @@ class PassboltApiAuthService:
     def _encrypt_for_server(self, gpg: gnupg.GPG, challenge_json: str, server_public_key: str) -> str:
         import_result = gpg.import_keys(server_public_key)
         if not import_result.fingerprints:
+            self._log_auth_event("error", "Failed to import Passbolt server public key", import_results=str(import_result.results))
             raise RuntimeError("Failed to import Passbolt server public key")
         recipient = import_result.fingerprints[0]
+        self._log_auth_event("info", "Passbolt server public key imported", fingerprint=recipient)
         encrypted = gpg.encrypt(challenge_json, recipients=[recipient], always_trust=True)
         if not encrypted.ok:
+            self._log_auth_event("error", "Unable to encrypt challenge for server", status=str(encrypted.status))
             raise RuntimeError(f"Unable to encrypt challenge for server: {encrypted.status}")
         return str(encrypted)
 
@@ -764,10 +845,7 @@ class PassboltApiAuthService:
         if not self.enabled():
             raise RuntimeError("Passbolt delete API is not configured")
 
-        status, verify_payload, raw = self._request_json("GET", "/auth/verify.json")
-        if status >= 400:
-            raise RuntimeError(raw or f"Unable to call /auth/verify.json HTTP {status}")
-        server_public_key = self._extract_server_public_key(verify_payload)
+        server_public_key = self._fetch_server_public_key()
 
         status, challenge_payload, raw = self._request_json("GET", f"/auth/jwt/rsa-challenge.json?user_id={requests.utils.quote(self.user_id)}")
         if status >= 400:
@@ -789,7 +867,12 @@ class PassboltApiAuthService:
         if challenge_id:
             challenge_document["challenge_id"] = challenge_id
 
-        encrypted_challenge = self._encrypt_for_server(gpg, json.dumps(challenge_document), server_public_key)
+        try:
+            encrypted_challenge = self._encrypt_for_server(gpg, json.dumps(challenge_document), server_public_key)
+            self._log_auth_event("info", "Challenge encrypted with Passbolt server public key")
+        except Exception as error:
+            self._log_auth_event("error", "Failed to encrypt challenge with Passbolt server public key", error=str(error))
+            raise
         login_body = {"challenge": encrypted_challenge, "user_id": self.user_id}
         if challenge_id:
             login_body["challenge_id"] = challenge_id
