@@ -6,6 +6,7 @@ import re
 import shlex
 import time
 import uuid
+from urllib.parse import urljoin
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from threading import Lock
@@ -382,7 +383,7 @@ class PassboltGroupService:
                 method,
                 f"{self.base_url}{path}",
                 json=payload,
-                timeout=PASSBOLT_API_TIMEOUT,
+                timeout=self.auth.timeout,
                 verify=self.auth.verify_setting,
                 headers={"Accept": "application/json", "Content-Type": "application/json", **dict(self.session.headers)},
             )
@@ -564,25 +565,43 @@ def generate_totp_code(secret: str) -> str:
     return pyotp.TOTP(cleaned).now()
 
 
-def _passbolt_tls_verify_config() -> bool | str:
+def get_requests_verify_value() -> bool | str:
+    if PASSBOLT_API_CA_BUNDLE and os.path.exists(PASSBOLT_API_CA_BUNDLE):
+        return PASSBOLT_API_CA_BUNDLE
     if not PASSBOLT_API_VERIFY_TLS:
         return False
-    if PASSBOLT_API_CA_BUNDLE:
-        if not os.path.exists(PASSBOLT_API_CA_BUNDLE):
-            raise RuntimeError(f"PASSBOLT_API_CA_BUNDLE file not found: {PASSBOLT_API_CA_BUNDLE}")
-        return PASSBOLT_API_CA_BUNDLE
     return True
+
+
+def get_tls_diagnostics() -> dict[str, Any]:
+    ca_bundle_configured = bool(PASSBOLT_API_CA_BUNDLE)
+    ca_bundle_exists = bool(PASSBOLT_API_CA_BUNDLE and os.path.exists(PASSBOLT_API_CA_BUNDLE))
+    verify_value = get_requests_verify_value()
+    verify_mode: str | bool
+    if isinstance(verify_value, str):
+        verify_mode = verify_value
+    elif verify_value is False:
+        verify_mode = "TLS verification disabled (debug mode)"
+    else:
+        verify_mode = "system"
+    return {
+        "ca_bundle_configured": ca_bundle_configured,
+        "ca_bundle_exists": ca_bundle_exists,
+        "verify_mode": verify_mode,
+        "verify_value": verify_value,
+    }
 
 
 def _classify_request_error(error: Exception) -> str:
     raw = str(error)
     lowered = raw.lower()
+    tls = get_tls_diagnostics()
     if "certificate verify failed" in lowered or "unable to get local issuer certificate" in lowered:
-        if PASSBOLT_API_VERIFY_TLS and PASSBOLT_API_CA_BUNDLE:
-            return f"TLS certificate validation failed (CA bundle: {PASSBOLT_API_CA_BUNDLE}): {raw}"
-        if PASSBOLT_API_VERIFY_TLS:
+        if isinstance(tls["verify_value"], str):
+            return f"TLS certificate validation failed (CA bundle: {tls['verify_value']}): {raw}"
+        if tls["verify_value"] is True:
             return "TLS certificate validation failed. Configure PASSBOLT_API_CA_BUNDLE with the issuer CA chain or use a publicly trusted certificate."
-        return f"TLS certificate validation failed: {raw}"
+        return f"TLS certificate validation failed while verification is disabled (debug mode): {raw}"
     return raw
 
 
@@ -595,7 +614,7 @@ class PassboltApiAuthService:
         self.passphrase = PASSBOLT_API_PASSPHRASE
         self.verify_tls = PASSBOLT_API_VERIFY_TLS
         self.ca_bundle = PASSBOLT_API_CA_BUNDLE
-        self.verify_setting = _passbolt_tls_verify_config()
+        self.verify_setting = get_requests_verify_value()
         self.mfa_provider = PASSBOLT_API_MFA_PROVIDER
         self.totp_secret = PASSBOLT_API_TOTP_SECRET
         self.timeout = PASSBOLT_API_TIMEOUT
@@ -605,6 +624,7 @@ class PassboltApiAuthService:
         self._tokens: dict[str, Any] = {}
 
     def config_status(self) -> dict[str, Any]:
+        tls = get_tls_diagnostics()
         checks = {
             "base_url": bool(self.base_url),
             "auth_mode": self.auth_mode == "jwt",
@@ -612,44 +632,66 @@ class PassboltApiAuthService:
             "private_key_path": bool(self.private_key_path),
             "private_key_exists": bool(self.private_key_path and os.path.exists(self.private_key_path)),
             "passphrase": bool(self.passphrase),
-            "verify_tls": isinstance(self.verify_setting, (bool, str)),
-            "ca_bundle": (not self.verify_tls) or (not self.ca_bundle) or os.path.exists(self.ca_bundle),
             "mfa_provider": self.mfa_provider == "totp",
             "totp_secret": bool(self.totp_secret),
+            "ca_bundle_configured": tls["ca_bundle_configured"],
+            "ca_bundle_exists": tls["ca_bundle_exists"],
         }
-        configured = all(checks.values())
+        base_config_ok = all(checks[name] for name in (
+            "base_url",
+            "auth_mode",
+            "user_id",
+            "private_key_path",
+            "private_key_exists",
+            "passphrase",
+            "mfa_provider",
+            "totp_secret",
+        ))
+        tls_ok = checks["ca_bundle_exists"] or (not checks["ca_bundle_configured"] and self.verify_setting is not False) or (self.verify_setting is False)
+        configured = base_config_ok and tls_ok
         missing = [name for name, ok in checks.items() if not ok]
         message = "Passbolt delete API is fully configured" if configured else (
             "Configuration incomplète: " + ", ".join(missing)
         )
+        if self.verify_setting is False:
+            message = f"{message}. TLS verification disabled (debug mode)"
+        elif checks["ca_bundle_configured"] and not checks["ca_bundle_exists"]:
+            message = f"{message}. CA bundle file not found: {self.ca_bundle}"
+
         return {
             "configured": configured,
             "checks": checks,
+            "tls": {
+                "verify_mode": tls["verify_mode"],
+            },
             "message": message,
             "auth_mode_value": self.auth_mode,
             "private_key_path_value": self.private_key_path,
             "mfa_provider_value": self.mfa_provider,
             "verify_tls_value": self.verify_tls,
             "ca_bundle_path_value": self.ca_bundle,
-            "verify_mode": self.verify_setting if isinstance(self.verify_setting, str) else ("system" if self.verify_setting else "disabled"),
             "timeout": self.timeout,
         }
 
     def enabled(self) -> bool:
         return bool(self.config_status().get("configured"))
 
-    def _extract_server_public_key(self, payload: dict[str, Any]) -> str:
+    def _log_auth_event(self, level: str, message: str, **payload: Any) -> None:
+        _save_live_log("auth", level, message, event_code="auth.debug", payload=payload or None)
+
+    def _extract_server_public_key_from_payload(self, payload: dict[str, Any]) -> str | None:
         candidates: list[Any] = [payload, payload.get("body") if isinstance(payload, dict) else None]
         for candidate in candidates:
             if isinstance(candidate, dict):
-                for key in ("public_key", "server_public_key", "armored_key"):
-                    value = candidate.get(key)
-                    if isinstance(value, str) and "BEGIN PGP PUBLIC KEY BLOCK" in value:
-                        return value
                 fingerprint = candidate.get("fingerprint")
                 if isinstance(fingerprint, str) and fingerprint:
                     self._server_fingerprint = fingerprint
-        raise RuntimeError("Unable to retrieve Passbolt server public key")
+                for key in ("public_key", "server_public_key", "armored_key", "key"):
+                    value = candidate.get(key)
+                    if isinstance(value, str) and "BEGIN PGP PUBLIC KEY BLOCK" in value:
+                        self._log_auth_event("info", "Server public key found inline in /auth/verify.json payload", source_key=key)
+                        return value
+        return None
 
     def _request_json(self, method: str, path: str, json_payload: dict[str, Any] | None = None) -> tuple[int, dict[str, Any], str]:
         response = self._session.request(
@@ -667,6 +709,79 @@ class PassboltApiAuthService:
             data = {}
         return response.status_code, data, response.text[:500]
 
+    def _fetch_server_public_key(self) -> str:
+        verify_url = f"{self.base_url}/auth/verify.json"
+        self._log_auth_event("info", "Calling Passbolt auth verify endpoint", url=verify_url)
+
+        try:
+            response = self._session.get(
+                verify_url,
+                timeout=self.timeout,
+                verify=self.verify_setting,
+                headers={"Accept": "application/json"},
+            )
+        except requests.RequestException as error:
+            message = _classify_request_error(error)
+            self._log_auth_event("error", "Failed to call /auth/verify.json", error=message)
+            raise RuntimeError(f"Unable to call /auth/verify.json: {message}") from error
+
+        self._log_auth_event("info", "Received /auth/verify.json response", status_code=response.status_code)
+
+        payload: dict[str, Any] = {}
+        try:
+            payload = response.json() if response.text else {}
+        except Exception:
+            payload = {}
+
+        if response.status_code >= 400:
+            error_msg = (response.text or "")[:500]
+            self._log_auth_event("error", "Passbolt /auth/verify.json returned an error", status_code=response.status_code, body=error_msg)
+            raise RuntimeError(error_msg or f"Unable to call /auth/verify.json HTTP {response.status_code}")
+
+        pubkey_header = (response.headers.get("X-GPGAuth-Pubkey") or "").strip()
+        self._log_auth_event(
+            "info",
+            "Checked X-GPGAuth-Pubkey header",
+            header_present=bool(pubkey_header),
+            header_value=pubkey_header or None,
+        )
+
+        if pubkey_header:
+            pubkey_url = urljoin(f"{self.base_url}/", pubkey_header)
+            self._log_auth_event("info", "Downloading server public key from X-GPGAuth-Pubkey URL", pubkey_url=pubkey_url)
+            try:
+                pubkey_response = self._session.get(
+                    pubkey_url,
+                    timeout=self.timeout,
+                    verify=self.verify_setting,
+                    headers={"Accept": "text/plain, application/pgp-keys, application/octet-stream"},
+                )
+            except requests.RequestException as error:
+                message = _classify_request_error(error)
+                self._log_auth_event("error", "Failed to download server public key from header URL", pubkey_url=pubkey_url, error=message)
+                raise RuntimeError(f"Unable to download Passbolt server public key from {pubkey_url}: {message}") from error
+
+            self._log_auth_event("info", "Server public key URL response received", pubkey_url=pubkey_url, status_code=pubkey_response.status_code)
+            if pubkey_response.status_code >= 400:
+                body = (pubkey_response.text or "")[:500]
+                self._log_auth_event("error", "Server public key URL returned an error", pubkey_url=pubkey_url, status_code=pubkey_response.status_code, body=body)
+                raise RuntimeError(f"Unable to download Passbolt server public key from {pubkey_url} HTTP {pubkey_response.status_code}: {body}")
+
+            pubkey_text = (pubkey_response.text or "").strip()
+            if "BEGIN PGP PUBLIC KEY BLOCK" in pubkey_text:
+                self._log_auth_event("info", "Server public key downloaded successfully", pubkey_url=pubkey_url)
+                return pubkey_text
+
+            self._log_auth_event("error", "Downloaded server public key does not contain an armored PGP key", pubkey_url=pubkey_url)
+            raise RuntimeError(f"Downloaded Passbolt server public key is invalid from {pubkey_url}")
+
+        inline_pubkey = self._extract_server_public_key_from_payload(payload)
+        if inline_pubkey:
+            return inline_pubkey
+
+        self._log_auth_event("error", "Unable to locate Passbolt server public key in verify header or payload", payload_keys=list(payload.keys()) if isinstance(payload, dict) else [])
+        raise RuntimeError("Unable to retrieve Passbolt server public key: X-GPGAuth-Pubkey missing and no inline key found")
+
     def _get_gpg(self) -> gnupg.GPG:
         gpg = gnupg.GPG(gnupghome="/tmp/gnupg-api")
         if not self.private_key_path or not os.path.exists(self.private_key_path):
@@ -680,10 +795,13 @@ class PassboltApiAuthService:
     def _encrypt_for_server(self, gpg: gnupg.GPG, challenge_json: str, server_public_key: str) -> str:
         import_result = gpg.import_keys(server_public_key)
         if not import_result.fingerprints:
+            self._log_auth_event("error", "Failed to import Passbolt server public key", import_results=str(import_result.results))
             raise RuntimeError("Failed to import Passbolt server public key")
         recipient = import_result.fingerprints[0]
+        self._log_auth_event("info", "Passbolt server public key imported", fingerprint=recipient)
         encrypted = gpg.encrypt(challenge_json, recipients=[recipient], always_trust=True)
         if not encrypted.ok:
+            self._log_auth_event("error", "Unable to encrypt challenge for server", status=str(encrypted.status))
             raise RuntimeError(f"Unable to encrypt challenge for server: {encrypted.status}")
         return str(encrypted)
 
@@ -727,10 +845,7 @@ class PassboltApiAuthService:
         if not self.enabled():
             raise RuntimeError("Passbolt delete API is not configured")
 
-        status, verify_payload, raw = self._request_json("GET", "/auth/verify.json")
-        if status >= 400:
-            raise RuntimeError(raw or f"Unable to call /auth/verify.json HTTP {status}")
-        server_public_key = self._extract_server_public_key(verify_payload)
+        server_public_key = self._fetch_server_public_key()
 
         status, challenge_payload, raw = self._request_json("GET", f"/auth/jwt/rsa-challenge.json?user_id={requests.utils.quote(self.user_id)}")
         if status >= 400:
@@ -752,7 +867,12 @@ class PassboltApiAuthService:
         if challenge_id:
             challenge_document["challenge_id"] = challenge_id
 
-        encrypted_challenge = self._encrypt_for_server(gpg, json.dumps(challenge_document), server_public_key)
+        try:
+            encrypted_challenge = self._encrypt_for_server(gpg, json.dumps(challenge_document), server_public_key)
+            self._log_auth_event("info", "Challenge encrypted with Passbolt server public key")
+        except Exception as error:
+            self._log_auth_event("error", "Failed to encrypt challenge with Passbolt server public key", error=str(error))
+            raise
         login_body = {"challenge": encrypted_challenge, "user_id": self.user_id}
         if challenge_id:
             login_body["challenge_id"] = challenge_id
@@ -803,7 +923,7 @@ class PassboltDeleteService:
             response = self.session.request(
                 method,
                 f"{self.base_url}{path}",
-                timeout=PASSBOLT_API_TIMEOUT,
+                timeout=self.auth.timeout,
                 verify=self.auth.verify_setting,
                 headers={"Accept": "application/json", "Content-Type": "application/json", **dict(self.session.headers)},
             )
@@ -924,6 +1044,20 @@ def process_delete_batch(batch_uuid: str, dry_run_only: bool = False, emit: Any 
     auth_service = PassboltApiAuthService()
     service = PassboltDeleteService(auth_service)
     results: list[dict[str, Any]] = []
+
+    tls = get_tls_diagnostics()
+    _save_live_log(
+        "delete",
+        "warning" if service.auth.verify_setting is False else "info",
+        "Delete API TLS mode initialized",
+        batch_uuid=batch_uuid,
+        event_code="delete.tls.mode",
+        payload={
+            "verify_mode": tls["verify_mode"],
+            "ca_bundle_configured": tls["ca_bundle_configured"],
+            "ca_bundle_exists": tls["ca_bundle_exists"],
+        },
+    )
 
     if emit:
         emit({"type": "log", "message": f"Delete batch {batch_uuid} started ({total} user(s))"})
@@ -1079,10 +1213,21 @@ def _process_rows(
     emit: Any = None,
 ) -> dict[str, Any]:
     started = time.time()
+    batch_uuid = str(uuid.uuid4())
     auth_service = PassboltApiAuthService()
     group_service = PassboltGroupService(auth_service)
+    group_tls = get_tls_diagnostics()
+    _emit_structured(
+        emit,
+        "warning" if auth_service.verify_setting is False else "info",
+        "groups.tls.mode",
+        "Groups and delete APIs share the same TLS verify mode",
+        batch_uuid=batch_uuid,
+        verify_mode=group_tls["verify_mode"],
+        ca_bundle_configured=group_tls["ca_bundle_configured"],
+        ca_bundle_exists=group_tls["ca_bundle_exists"],
+    )
     preview = preview_rows(rows)
-    batch_uuid = str(uuid.uuid4())
     create_import_batch(batch_uuid=batch_uuid, filename=source_filename, total_rows=len(rows), status="running")
     _save_live_log("import", "info", "Import batch record created", batch_uuid=batch_uuid, event_code="import.batch.created", payload={"filename": source_filename, "total_rows": len(rows)})
 
@@ -1442,6 +1587,18 @@ def pending_group_assignments() -> Any:
 def retry_pending_group_assignments() -> Any:
     auth_service = PassboltApiAuthService()
     group_service = PassboltGroupService(auth_service)
+    group_tls = get_tls_diagnostics()
+    _save_live_log(
+        "groups",
+        "warning" if auth_service.verify_setting is False else "info",
+        "Groups and delete APIs share the same TLS verify mode",
+        event_code="groups.tls.mode",
+        payload={
+            "verify_mode": group_tls["verify_mode"],
+            "ca_bundle_configured": group_tls["ca_bundle_configured"],
+            "ca_bundle_exists": group_tls["ca_bundle_exists"],
+        },
+    )
     try:
         group_service.authenticate()
     except Exception as error:
