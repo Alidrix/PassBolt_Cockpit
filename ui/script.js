@@ -163,7 +163,16 @@ function formatDate(value) {
 
 async function apiGet(path) {
   const response = await fetch(path);
-  const payload = await response.json();
+  const raw = await response.text();
+  let payload = null;
+
+  try {
+    payload = raw ? JSON.parse(raw) : {};
+  } catch (error) {
+    const snippet = raw.slice(0, 120).replace(/\n/g, ' ');
+    throw new Error(`Réponse non JSON sur ${path} (HTTP ${response.status})${snippet ? `: ${snippet}` : ''}`);
+  }
+
   if (!response.ok) throw new Error(payload?.error || `HTTP ${response.status}`);
   return payload;
 }
