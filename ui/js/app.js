@@ -5,12 +5,14 @@ import { renderImporterView } from './views/importer.js';
 import { renderDeletionsView, refreshDeleteConfig } from './views/deletions.js';
 import { renderHistoryView, refreshHistory } from './views/history.js';
 import { renderLogsView, refreshLogs } from './views/logs.js';
+import { renderPassboltHealthView, refreshPassboltHealth } from './views/passbolt-health.js';
 
 const refreshByView = {
   dashboardView: refreshDashboard,
   deletionsView: refreshDeleteConfig,
   historyView: refreshHistory,
-  logsAuditView: refreshLogs
+  logsAuditView: refreshLogs,
+  passboltHealthView: refreshPassboltHealth
 };
 
 function refreshActiveView() {
@@ -46,6 +48,7 @@ function renderLayout() {
   renderDeletionsView();
   renderHistoryView();
   renderLogsView();
+  renderPassboltHealthView();
 }
 
 function init() {
@@ -58,7 +61,7 @@ function init() {
   $('globalRefresh')?.addEventListener('click', () => {
     refreshActiveView().catch((e) => setToast(e.message));
   });
-  Promise.all([refreshDashboard(), refreshDeleteConfig(), refreshHistory(), refreshLogs()]).catch((e) => setToast(e.message));
+  Promise.all([refreshDashboard(), refreshDeleteConfig(), refreshHistory(), refreshLogs(), refreshPassboltHealth()]).catch((e) => setToast(e.message));
 }
 
 
