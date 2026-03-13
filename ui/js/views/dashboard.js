@@ -21,6 +21,19 @@ export function renderDashboardView() {
     <div class="card"><div class="section-header"><h3>Activité récente</h3></div><div id="activityBlock"></div></div>
   `;
   $('dashboardRefresh').addEventListener('click', refreshDashboard);
+  $('quickActionsBlock').innerHTML = `
+    <button class="btn btn-primary" data-target-view="importerView">Nouvel import</button>
+    <button class="btn btn-secondary" data-target-view="historyView">Voir historique</button>
+    <button class="btn btn-secondary" data-target-view="deletionsView">Prévisualiser suppression</button>
+    <button class="btn btn-secondary" data-target-view="logsAuditView">Ouvrir logs</button>
+  `;
+  document.querySelectorAll('[data-target-view]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const view = button.dataset.targetView;
+      const nav = document.querySelector(`.menu-item[data-view="${view}"]`);
+      nav?.click();
+    });
+  });
 }
 
 function resolveSystemStatus(health, deleteCfg, dbSummary) {
@@ -69,7 +82,16 @@ export async function refreshDashboard() {
       ? `<p class="text-ellipsis"><strong>${escapeHtml(latest.filename || '-')}</strong></p><p class="muted text-ellipsis">${formatDate(latest.created_at)}</p><p>${statusBadge(latest.status)}</p><p class="muted text-break">Batch: ${escapeHtml(latest.batch_uuid || '-')}</p>`
       : emptyState('Aucun import enregistré.');
     const alerts = [logsSummary?.by_level?.error ? `${logsSummary.by_level.error} erreur(s) critiques` : '', !deleteCfg?.configured ? 'Delete API non configurée' : '', !health?.ok ? 'API Import indisponible' : ''].filter(Boolean);
-    $('alertsBlock').innerHTML = alerts.length ? alerts.map((a) => `<p class="line-clamp-2 text-break">• ${escapeHtml(a)}</p>`).join('') : emptyState('Aucune alerte majeure.');
-    $('activityBlock').innerHTML = state.batches.slice(0, 5).map((b) => `<div class="mb-3"><p class="text-ellipsis"><strong>${escapeHtml(b.filename || 'Sans nom')}</strong></p><p class="muted text-ellipsis">${formatDate(b.created_at)}</p></div>`).join('') || emptyState('Aucune activité récente.');
+    $('alertsBlock').innerHTML = alerts.length ? `<p class="dashboard-alert-count">${alerts.length} alerte(s)</p>${alerts.map((a) => `<p class="line-clamp-2 text-break dashboard-alert-line">• ${escapeHtml(a)}</p>`).join('')}<div class="mt-3"><button class="btn btn-secondary" data-target-view="logsAuditView">Voir les logs</button></div>` : emptyState('Aucune alerte majeure.');
+    $('activityBlock').innerHTML = state.batches.slice(0, 5).map((b) => `<div class="dashboard-activity-item"><p class="text-ellipsis"><strong>${escapeHtml(b.filename || 'Sans nom')}</strong></p><p class="muted text-ellipsis">Import ${escapeHtml((b.status || 'unknown').toLowerCase())} — ${formatDate(b.created_at)}</p></div>`).join('') || emptyState('Aucune activité récente.');
+    document.querySelectorAll('[data-target-view]').forEach((button) => {
+      if (button.dataset.navBound) return;
+      button.dataset.navBound = 'true';
+      button.addEventListener('click', () => {
+        const view = button.dataset.targetView;
+        const nav = document.querySelector(`.menu-item[data-view="${view}"]`);
+        nav?.click();
+      });
+    });
   } catch (e) { setToast(`Dashboard indisponible: ${e.message}`); }
 }
