@@ -38,6 +38,12 @@ from db import (
     update_user_delete_state,
 )
 
+from passbolt_api import (
+    PassboltApiAuthService as PassboltApiAuthServiceV2,
+    PassboltDeleteService as PassboltDeleteServiceV2,
+    PassboltGroupService as PassboltGroupServiceV2,
+)
+
 app = Flask(__name__)
 init_db()
 
@@ -72,6 +78,29 @@ SAFE_ROLE = {"user", "admin"}
 PENDING_ASSIGNMENTS: list[dict[str, Any]] = []
 PENDING_LOCK = Lock()
 
+
+def validate_startup_configuration() -> list[str]:
+    required = {
+        "PASSBOLT_API_BASE_URL": os.getenv("PASSBOLT_API_BASE_URL", "") or os.getenv("PASSBOLT_URL", ""),
+        "PASSBOLT_API_USER_ID": os.getenv("PASSBOLT_API_USER_ID", ""),
+        "PASSBOLT_API_PRIVATE_KEY_PATH": os.getenv("PASSBOLT_API_PRIVATE_KEY_PATH", ""),
+        "PASSBOLT_API_PASSPHRASE": os.getenv("PASSBOLT_API_PASSPHRASE", ""),
+    }
+    issues: list[str] = []
+    for key, value in required.items():
+        if not value:
+            issues.append(f"missing env: {key}")
+    key_path = required.get("PASSBOLT_API_PRIVATE_KEY_PATH")
+    if key_path and not os.path.exists(str(key_path)):
+        issues.append(f"private key file not found: {key_path}")
+    ca_bundle = os.getenv("PASSBOLT_API_CA_BUNDLE", "")
+    if ca_bundle and not os.path.exists(ca_bundle):
+        issues.append(f"CA bundle not found: {ca_bundle}")
+    return issues
+
+
+for _issue in validate_startup_configuration():
+    print(f"[WARNING] Startup config validation: {_issue}")
 
 def _sanitize_value(name: str, value: str) -> str:
     cleaned = (value or "").strip()
@@ -1070,8 +1099,8 @@ def process_delete_batch(batch_uuid: str, dry_run_only: bool = False, emit: Any 
 
     users = get_deletable_users_for_batch(batch_uuid)
     total = len(users)
-    auth_service = PassboltApiAuthService()
-    service = PassboltDeleteService(auth_service)
+    auth_service = PassboltApiAuthServiceV2()
+    service = PassboltDeleteServiceV2(auth_service)
     results: list[dict[str, Any]] = []
 
     tls = get_tls_diagnostics()
@@ -1243,8 +1272,8 @@ def _process_rows(
 ) -> dict[str, Any]:
     started = time.time()
     batch_uuid = str(uuid.uuid4())
-    auth_service = PassboltApiAuthService()
-    group_service = PassboltGroupService(auth_service)
+    auth_service = PassboltApiAuthServiceV2()
+    group_service = PassboltGroupServiceV2(auth_service)
     group_tls = get_tls_diagnostics()
     _emit_structured(
         emit,
@@ -1614,8 +1643,8 @@ def pending_group_assignments() -> Any:
 
 @app.route("/retry-pending-group-assignments", methods=["POST"])
 def retry_pending_group_assignments() -> Any:
-    auth_service = PassboltApiAuthService()
-    group_service = PassboltGroupService(auth_service)
+    auth_service = PassboltApiAuthServiceV2()
+    group_service = PassboltGroupServiceV2(auth_service)
     group_tls = get_tls_diagnostics()
     _save_live_log(
         "groups",
@@ -1670,8 +1699,15 @@ def retry_pending_group_assignments() -> Any:
 
 @app.route("/delete-config-status", methods=["GET"])
 def delete_config_status() -> Any:
-    auth = PassboltApiAuthService()
-    payload = auth.config_status()
+    auth = PassboltApiAuthServiceV2()
+    report = auth.run_diagnostic()
+    groups_step = next((step for step in report.get("steps", []) if step.get("id") == "groups"), {})
+    payload = {
+        "configured": report.get("overall_status") == "ok",
+        "message": groups_step.get("message") or "Diagnostic API Passbolt exécuté",
+        "overall_status": report.get("overall_status"),
+        "groups_status": groups_step.get("status", "skipped"),
+    }
     _save_live_log(
         "delete",
         "info" if payload.get("configured") else "warning",
@@ -1680,6 +1716,20 @@ def delete_config_status() -> Any:
         payload=payload,
     )
     return jsonify(payload)
+
+
+@app.route("/passbolt/health", methods=["GET", "POST"])
+def passbolt_health() -> Any:
+    auth = PassboltApiAuthServiceV2()
+    report = auth.run_diagnostic()
+    _save_live_log(
+        "groups",
+        "info" if report.get("overall_status") == "ok" else "warning",
+        "Passbolt API diagnostic completed",
+        event_code="passbolt.health.diagnostic",
+        payload={"overall_status": report.get("overall_status")},
+    )
+    return jsonify(report)
 
 
 @app.route("/delete-last-import-users", methods=["POST"])

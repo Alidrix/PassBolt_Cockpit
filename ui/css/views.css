@@ -79,3 +79,13 @@ th { position: sticky; top: 0; background: var(--color-surface-2); z-index: 1; }
 #deleteRows td { vertical-align: middle; }
 @media (max-width: 1200px) { .deletions-top-row { grid-template-columns: 1fr; align-items: stretch; } .deletions-actions { justify-content: flex-start; } .section-header { flex-direction: column; align-items: flex-start; } .section-header > .grid-kpi { width: 100%; grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 
+
+.health-pillars { display:grid; grid-template-columns: repeat(auto-fit,minmax(180px,1fr)); gap:10px; }
+.health-pillar { border:1px solid var(--border-color); border-radius:10px; padding:10px; display:flex; justify-content:space-between; align-items:center; gap:8px; }
+.health-step { border:1px solid var(--border-color); border-left:4px solid var(--border-color); border-radius:10px; padding:10px; margin-bottom:10px; }
+.health-step-success { border-left-color: var(--green-500); }
+.health-step-warning { border-left-color: var(--amber-500); }
+.health-step-error { border-left-color: var(--red-500); }
+.health-step-skipped { border-left-color: var(--gray-400); }
+.health-step-head { display:flex; justify-content:space-between; gap:10px; align-items:center; }
+.json-block { white-space:pre-wrap; word-break:break-word; background:var(--surface-alt); border-radius:8px; padding:8px; }

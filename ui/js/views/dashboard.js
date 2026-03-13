@@ -39,6 +39,7 @@ export function renderDashboardView() {
     <button class="btn btn-primary" data-target-view="importerView">Nouvel import</button>
     <button class="btn btn-secondary" data-target-view="historyView">Historique</button>
     <button class="btn btn-secondary" data-target-view="deletionsView">Prévisualiser</button>
+    <button class="btn btn-secondary" data-target-view="passboltHealthView">Santé API</button>
     <button class="btn btn-secondary" data-target-view="logsAuditView">Logs</button>
   `;
   document.querySelectorAll('[data-target-view]').forEach((button) => {
@@ -63,9 +64,10 @@ export async function refreshDashboard() {
     const latest = dbSummary?.last_batch || state.batches[0];
     const healthCards = [
       { label: 'API Import', ok: Boolean(health?.ok), detail: health?.ok ? 'Configurée' : 'Non détectée' },
-      { label: 'Delete API', ok: Boolean(deleteCfg?.configured), detail: deleteCfg?.configured ? 'Configurée' : 'Non détectée' },
+      { label: 'Création utilisateur via CLI', ok: Boolean(health?.docker?.cli_path_found), detail: health?.cli_path || 'CLI non détectée' },
+      { label: 'Groupes / Suppression API', ok: (deleteCfg?.overall_status || '') === 'ok', detail: deleteCfg?.message || 'Diagnostic requis' },
       { label: 'Base locale', ok: true, detail: `${dbSummary?.batches_count || 0} batch` },
-      { label: 'Passbolt / CLI', ok: Boolean(health?.resolved_cli_path), detail: health?.resolved_cli_path || 'Chemin inconnu' }
+      { label: 'Santé API globale', ok: (deleteCfg?.overall_status || '') === 'ok', detail: deleteCfg?.overall_status || 'unknown' }
     ];
     $('healthGrid').innerHTML = healthCards.map((item) => renderHealthCard(item)).join('');
 
