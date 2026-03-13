@@ -1,96 +1,133 @@
-# TheTrendScope — Cockpit Passbolt Import & Audit
+# TheTrendScope — Cockpit Passbolt Import, Groupes, Suppressions & Santé API
 
-Plateforme cockpit pour importer des utilisateurs Passbolt, auditer les runs et piloter les suppressions via les endpoints backend existants.
+## Vue d’ensemble
 
-## Front officiel
+Ce projet sépare maintenant clairement 4 flux :
 
-- ✅ Le front servi en production est **`ui/`**.
-- ⚠️ `frontend/` est un dossier **legacy/historique**.
-- ✅ Le front v2 continue d’utiliser les routes backend existantes via **`/api/*`**.
+1. **Création utilisateurs via CLI** (dans le conteneur Passbolt, via `cake passbolt register_user`).
+2. **Gestion des groupes via API Passbolt** (`/groups.json`, lecture/création/affectation).
+3. **Suppression via API Passbolt** (avec **dry-run obligatoire** avant suppression réelle).
+4. **Diagnostic “Santé API Passbolt”** (test bout-en-bout connectivité/TLS/auth/MFA/permissions).
 
-## Lancement rapide
+> Le statut “configuré” n’est plus basé sur la seule présence de variables : il s’appuie sur un diagnostic réel.
+
+---
+
+## Lancement
 
 ```bash
-sudo docker compose up -d --build
+docker compose --env-file .env up -d --build
 ```
 
-Services principaux :
-- `importer-ui` : `http://<host>:9091`
-- `importer-api` : `http://<host>:9090`
+- UI : `http://localhost:9091`
+- API : `http://localhost:9090`
 
-## UI v2 (cockpit premium)
+Créez d’abord votre fichier `.env` depuis `.env.example`.
 
-La v2 fournie dans `ui/` apporte :
-- hiérarchie visuelle cockpit (fond bleu marine, accent rouge de marque)
-- statuts homogènes (success / warning / danger / info)
-- protection anti-débordement (ellipsis, line-clamp, break-word, `min-width: 0`, tables en `fixed`)
-- séparation métier / technique (vue Logs & audit plus stricte)
-- mode **clair/sombre** avec persistance locale
-- modularisation JS/CSS par vues et composants réutilisables
+---
 
-### Architecture front `ui/`
+## Configuration API Passbolt (sécurisée)
 
-```text
-ui/
-  css/
-    tokens.css
-    base.css
-    layout.css
-    components.css
-    views.css
-    utilities.css
-  js/
-    app.js
-    api.js
-    state.js
-    utils.js
-    views/
-      dashboard.js
-      importer.js
-      deletions.js
-      history.js
-      logs.js
-    components/
-      page-header.js
-      status-chip.js
-      health-card.js
-      kpi-card.js
-      progress-stepper.js
-      console-panel.js
-      danger-zone.js
-      empty-state.js
-      logs-table.js
-```
+Les secrets ne sont plus hardcodés dans `docker-compose.yml`.
 
-## Endpoints backend utilisés (inchangés)
+Variables principales :
+
+- `PASSBOLT_API_BASE_URL`
+- `PASSBOLT_API_USER_ID`
+- `PASSBOLT_API_PRIVATE_KEY_PATH`
+- `PASSBOLT_API_PASSPHRASE`
+- `PASSBOLT_API_VERIFY_TLS`
+- `PASSBOLT_API_CA_BUNDLE`
+- `PASSBOLT_API_MFA_PROVIDER`
+- `PASSBOLT_API_TOTP_SECRET`
+
+Validation au démarrage :
+- message explicite si variable obligatoire manquante,
+- message explicite si clé privée introuvable,
+- message explicite si CA bundle introuvable.
+
+---
+
+## Auth JWT Passbolt (implémentation actuelle)
+
+Le backend suit le flux JWT attendu :
+
+1. appel `/auth/verify.json`,
+2. récupération de la clé publique serveur,
+3. génération locale du challenge (`version`, `domain`, `verify_token`, `verify_token_expiry`),
+4. signature avec clé privée compte technique,
+5. chiffrement avec clé publique serveur,
+6. POST `/auth/jwt/login.json`,
+7. déchiffrement de la réponse,
+8. validation stricte de `verify_token`,
+9. extraction `access_token`/`refresh_token`,
+10. gestion MFA TOTP si demandé.
+
+---
+
+## Diagnostic “Santé API Passbolt”
+
+Nouvel endpoint backend :
+
+- `GET /api/passbolt/health`
+- `POST /api/passbolt/health`
+
+Réponse :
+
+- `overall_status`: `ok | warning | error`
+- `steps[]` avec :
+  - `id`, `label`, `status`
+  - `started_at`, `finished_at`
+  - `message`, `details`
+  - `http_status`, `endpoint`, `remediation`
+
+Étapes testées : config, réseau, TLS, verify endpoint, clés, challenge JWT, login, verify_token, MFA, endpoint authentifié, groupes, healthcheck, permissions.
+
+---
+
+## Suppression API : dry-run obligatoire
+
+La suppression d’utilisateur passe d’abord par :
+
+- `DELETE /users/{userId}/dry-run.json`
+
+Le backend bloque la suppression réelle si le dry-run échoue et remonte une cause métier (owner unique, transfert requis, dépendances, etc.).
+
+Dry-run groupes également disponible côté service :
+
+- `DELETE /groups/{groupId}/dry-run.json`
+
+---
+
+## UI
+
+Nouvelle rubrique : **“Santé API Passbolt”**
+
+- bouton “Lancer le diagnostic”,
+- statut global,
+- piliers (Connectivité/TLS/JWT/MFA/Groupes/Suppression/Healthcheck),
+- timeline détaillée étape par étape,
+- détails techniques repliables,
+- actions recommandées.
+
+---
+
+## Endpoints principaux
 
 - `GET /api/health`
 - `GET /api/delete-config-status`
-- `GET /api/db/summary`
-- `GET /api/batches`
+- `GET|POST /api/passbolt/health`
 - `POST /api/import-stream`
 - `POST /api/delete-users-stream`
+- `GET /api/batches`
 - `GET /api/logs`
 - `GET /api/logs/summary`
-- `GET /api/logs/export.csv`
-- `DELETE /api/logs`
 
-## Variables d’environnement
+---
 
-Voir les variables Passbolt/API dans l’ancien README (CLI container, TLS, JWT/MFA, timeouts).
-Le comportement backend n’a pas été changé par cette refonte UI.
+## Erreurs fréquentes
 
-## Notes responsive & robustesse
-
-Cibles testées pour la v2 :
-- 1366x768
-- 1920x1080
-
-Cas extrêmes couverts côté rendu :
-- email long, UUID batch long, nom de fichier CSV long
-- chemins techniques et logs verbeux
-- états zéro donnée / beaucoup de données
-
-## Legacy
-
-Le dossier `frontend/` est conservé pour référence historique mais n’est plus la source UI recommandée.
+- **MFA requis mais secret absent** : renseigner `PASSBOLT_API_TOTP_SECRET`.
+- **TLS invalide** : fournir `PASSBOLT_API_CA_BUNDLE` correct.
+- **`/groups.json` refusé** : permissions insuffisantes du compte API.
+- **verify_token mismatch** : challenge/réponse non cohérents, auth refusée.
