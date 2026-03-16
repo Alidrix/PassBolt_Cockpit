@@ -3,8 +3,6 @@ from __future__ import annotations
 import json
 import os
 import secrets
-import time
-import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -15,46 +13,12 @@ import pyotp
 import requests
 
 
-@dataclass
-class DiagnosticStep:
-    id: str
-    label: str
-    status: str = "skipped"
-    started_at: str | None = None
-    finished_at: str | None = None
-    message: str = ""
-    details: dict[str, Any] = field(default_factory=dict)
-    http_status: int | None = None
-    endpoint: str | None = None
-    remediation: str | None = None
-
-    def start(self) -> None:
-        self.started_at = datetime.now(timezone.utc).isoformat()
-
-    def done(self, status: str, message: str, **kwargs: Any) -> None:
-        self.status = status
-        self.message = message
-        self.finished_at = datetime.now(timezone.utc).isoformat()
-        for key, value in kwargs.items():
-            setattr(self, key, value)
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "id": self.id,
-            "label": self.label,
-            "status": self.status,
-            "started_at": self.started_at,
-            "finished_at": self.finished_at,
-            "message": self.message,
-            "details": self.details,
-            "http_status": self.http_status,
-            "endpoint": self.endpoint,
-            "remediation": self.remediation,
-        }
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 def _now_plus(minutes: int) -> str:
-    return (datetime.now(timezone.utc) + timedelta(minutes=minutes)).isoformat()
+    return (_utc_now() + timedelta(minutes=minutes)).isoformat()
 
 
 def _extract_message(payload: Any, fallback: str = "") -> str:
@@ -79,7 +43,7 @@ def parse_dry_run_message(payload: dict[str, Any], fallback: str = "Dry-run reje
                 candidates.append(str(body.get(key)))
         errors = body.get("errors")
         if isinstance(errors, dict):
-            for _, value in errors.items():
+            for value in errors.values():
                 if isinstance(value, list):
                     candidates.extend(str(v) for v in value if v)
                 elif value:
@@ -95,6 +59,59 @@ def parse_dry_run_message(payload: dict[str, Any], fallback: str = "Dry-run reje
     return next((x for x in candidates if x), fallback)
 
 
+def parse_dry_run_details(payload: dict[str, Any]) -> dict[str, Any]:
+    body = payload.get("body") if isinstance(payload, dict) else None
+    if not isinstance(body, dict):
+        return {}
+    interesting = (
+        "resources", "resources_count", "groups", "groups_to_delete", "ownership", "ownership_remaining",
+        "dependencies", "blocking_reasons", "transfers", "required_actions", "errors",
+    )
+    result: dict[str, Any] = {}
+    for key in interesting:
+        if key in body:
+            result[key] = body.get(key)
+    return result
+
+
+@dataclass
+class DiagnosticStep:
+    id: str
+    label: str
+    status: str = "skipped"
+    started_at: str | None = None
+    finished_at: str | None = None
+    message: str = ""
+    details: dict[str, Any] = field(default_factory=dict)
+    http_status: int | None = None
+    endpoint: str | None = None
+    remediation: str | None = None
+
+    def start(self) -> None:
+        self.started_at = _utc_now().isoformat()
+
+    def done(self, status: str, message: str, **kwargs: Any) -> None:
+        self.status = status
+        self.message = message
+        self.finished_at = _utc_now().isoformat()
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "label": self.label,
+            "status": self.status,
+            "started_at": self.started_at,
+            "finished_at": self.finished_at,
+            "message": self.message,
+            "details": self.details,
+            "http_status": self.http_status,
+            "endpoint": self.endpoint,
+            "remediation": self.remediation,
+        }
+
+
 class PassboltApiAuthService:
     def __init__(self, logger: Any | None = None) -> None:
         self.base_url = (os.getenv("PASSBOLT_API_BASE_URL", "") or os.getenv("PASSBOLT_URL", "")).rstrip("/")
@@ -102,7 +119,7 @@ class PassboltApiAuthService:
         self.user_id = (os.getenv("PASSBOLT_API_USER_ID", "") or "").strip()
         self.private_key_path = (os.getenv("PASSBOLT_API_PRIVATE_KEY_PATH", "/app/keys/admin-private.asc") or "").strip()
         self.passphrase = os.getenv("PASSBOLT_API_PASSPHRASE", "")
-        self.verify_tls = (os.getenv("PASSBOLT_API_VERIFY_TLS", "true").lower() not in {"0", "false", "no"})
+        self.verify_tls = os.getenv("PASSBOLT_API_VERIFY_TLS", "true").lower() not in {"0", "false", "no"}
         self.ca_bundle = (os.getenv("PASSBOLT_API_CA_BUNDLE", "") or "").strip()
         self.mfa_provider = (os.getenv("PASSBOLT_API_MFA_PROVIDER", "totp") or "totp").strip().lower()
         self.totp_secret = (os.getenv("PASSBOLT_API_TOTP_SECRET", "") or "").strip()
@@ -110,43 +127,66 @@ class PassboltApiAuthService:
         self._session = requests.Session()
         self._tokens: dict[str, Any] = {}
         self._logger = logger
-        self.verify_setting = self.ca_bundle if self.ca_bundle and os.path.exists(self.ca_bundle) else self.verify_tls
+        self._last_verify_token: str | None = None
+        self._last_mfa_status = "not_required"
+
+    @property
+    def verify_setting(self) -> bool | str:
+        if self.ca_bundle:
+            return self.ca_bundle
+        return self.verify_tls
 
     def _log(self, level: str, message: str, **details: Any) -> None:
         if self._logger:
             self._logger(level, message, **details)
 
     def enabled(self) -> bool:
-        return all([self.base_url, self.user_id, self.private_key_path, self.passphrase])
+        status = self.config_status()
+        return bool(status.get("configured"))
 
     def config_status(self) -> dict[str, Any]:
+        ca_bundle_exists = bool(self.ca_bundle and os.path.exists(self.ca_bundle))
+        ca_bundle_readable = bool(ca_bundle_exists and os.access(self.ca_bundle, os.R_OK))
         checks = {
             "base_url": bool(self.base_url),
+            "auth_mode": self.auth_mode == "jwt",
             "user_id": bool(self.user_id),
             "private_key_path": bool(self.private_key_path),
             "private_key_exists": bool(self.private_key_path and os.path.exists(self.private_key_path)),
+            "private_key_readable": bool(self.private_key_path and os.path.exists(self.private_key_path) and os.access(self.private_key_path, os.R_OK)),
             "passphrase": bool(self.passphrase),
-            "ca_bundle_configured": bool(self.ca_bundle),
-            "ca_bundle_exists": bool(self.ca_bundle and os.path.exists(self.ca_bundle)),
+            "mfa_provider": self.mfa_provider == "totp",
             "totp_secret": bool(self.totp_secret),
+            "ca_bundle_configured": bool(self.ca_bundle),
+            "ca_bundle_exists": ca_bundle_exists,
+            "ca_bundle_readable": ca_bundle_readable,
+            "verify_tls": self.verify_tls,
         }
-        return {
-            "configured": all(checks[k] for k in ("base_url", "user_id", "private_key_path", "private_key_exists", "passphrase")),
-            "checks": checks,
-            "message": "Configuration API Passbolt incomplète" if not all(checks[k] for k in ("base_url", "user_id", "private_key_exists", "passphrase")) else "Configuration minimale détectée",
-        }
+        required = ("base_url", "auth_mode", "user_id", "private_key_path", "private_key_exists", "private_key_readable", "passphrase")
+        configured = all(checks[k] for k in required)
+        if checks["ca_bundle_configured"] and (not checks["ca_bundle_exists"] or not checks["ca_bundle_readable"]):
+            configured = False
+        message = "Configuration minimale détectée" if configured else "Configuration API Passbolt incomplète"
+        return {"configured": configured, "checks": checks, "message": message}
 
     def _request_json(self, method: str, path: str, payload: dict[str, Any] | None = None) -> tuple[int, dict[str, Any], str, requests.Response | None]:
         url = f"{self.base_url}{path}"
         try:
-            response = self._session.request(method, url, json=payload, timeout=self.timeout, verify=self.verify_setting, headers={"Accept": "application/json", "Content-Type": "application/json", **self._session.headers})
+            response = self._session.request(
+                method,
+                url,
+                json=payload,
+                timeout=self.timeout,
+                verify=self.verify_setting,
+                headers={"Accept": "application/json", "Content-Type": "application/json", **dict(self._session.headers)},
+            )
             data: dict[str, Any] = {}
             if response.text:
                 try:
                     data = response.json()
                 except Exception:
                     data = {}
-            return response.status_code, data, response.text[:1000], response
+            return response.status_code, data, response.text[:2000], response
         except requests.RequestException as error:
             return 0, {}, str(error), None
 
@@ -160,27 +200,38 @@ class PassboltApiAuthService:
             raise RuntimeError("Import de la clé privée impossible")
         return gpg
 
-    def _fetch_server_public_key(self) -> str:
-        self._log("info", "[INFO] Calling /auth/verify.json")
-        status, payload, raw, response = self._request_json("GET", "/auth/verify.json")
-        if status >= 400 or status == 0:
-            raise RuntimeError(f"/auth/verify.json inaccessible: {raw or status}")
+    @staticmethod
+    def _extract_pgp_public_key(payload: dict[str, Any], response: requests.Response | None) -> str:
         body = payload.get("body") if isinstance(payload, dict) else None
-        search_objects = [payload, body] if isinstance(body, dict) else [payload]
-        for obj in search_objects:
-            if not isinstance(obj, dict):
-                continue
+        search = [payload]
+        if isinstance(body, dict):
+            search.append(body)
+        for obj in search:
             for key in ("server_public_key", "public_key", "keydata", "armored_key"):
                 value = obj.get(key)
                 if isinstance(value, str) and "BEGIN PGP PUBLIC KEY BLOCK" in value:
                     return value
         if response is not None:
-            key_url = response.headers.get("X-GPGAuth-Verify-Response")
-            if key_url:
-                key_resp = self._session.get(key_url, timeout=self.timeout, verify=self.verify_setting)
-                if key_resp.ok and "BEGIN PGP PUBLIC KEY BLOCK" in key_resp.text:
-                    return key_resp.text
-        raise RuntimeError("Clé publique serveur introuvable")
+            for header in ("X-GPGAuth-Verify-Response", "X-GPGAuth-Pubkey"):
+                header_url = response.headers.get(header)
+                if header_url:
+                    return header_url
+        raise RuntimeError("Clé publique serveur introuvable dans /auth/verify.json")
+
+    def _fetch_server_public_key(self) -> str:
+        self._log("info", "Calling /auth/verify.json")
+        status, payload, raw, response = self._request_json("GET", "/auth/verify.json")
+        if status >= 400 or status == 0:
+            raise RuntimeError(f"/auth/verify.json inaccessible: {_extract_message(payload, raw)}")
+        key_or_url = self._extract_pgp_public_key(payload, response)
+        if "BEGIN PGP PUBLIC KEY BLOCK" in key_or_url:
+            self._log("info", "Server public key retrieved")
+            return key_or_url
+        key_resp = self._session.get(key_or_url, timeout=self.timeout, verify=self.verify_setting)
+        if not key_resp.ok or "BEGIN PGP PUBLIC KEY BLOCK" not in key_resp.text:
+            raise RuntimeError("Clé publique serveur introuvable")
+        self._log("info", "Server public key retrieved")
+        return key_resp.text
 
     def _encrypt_for_server(self, gpg: gnupg.GPG, plaintext: str, server_public_key: str) -> str:
         imported = gpg.import_keys(server_public_key)
@@ -197,18 +248,45 @@ class PassboltApiAuthService:
             raise RuntimeError(f"Déchiffrement échoué: {decrypted.status}")
         return str(decrypted)
 
-    def _verify_mfa_if_required(self, login_payload: dict[str, Any]) -> None:
-        providers = login_payload.get("mfa_providers") or (login_payload.get("body", {}) if isinstance(login_payload.get("body"), dict) else {}).get("mfa_providers")
+    def _extract_token_payload(self, gpg: gnupg.GPG, login_payload: dict[str, Any]) -> dict[str, Any]:
+        body = login_payload.get("body") if isinstance(login_payload, dict) else None
+        if isinstance(body, str) and "BEGIN PGP MESSAGE" in body:
+            self._log("info", "JWT login response decrypted")
+            return json.loads(self._decrypt_payload(gpg, body))
+        if isinstance(body, dict):
+            return body
+        if isinstance(login_payload, dict):
+            return login_payload
+        raise RuntimeError("Réponse login inattendue")
+
+    def _verify_mfa_if_required(self, token_payload: dict[str, Any]) -> str:
+        providers = token_payload.get("mfa_providers")
         if not providers:
-            return
+            body = token_payload.get("body") if isinstance(token_payload.get("body"), dict) else {}
+            providers = body.get("mfa_providers")
+        if not providers:
+            self._last_mfa_status = "not_required"
+            return "not_required"
+
+        self._log("info", "MFA required", providers=providers)
         if self.mfa_provider != "totp":
-            raise RuntimeError("MFA requis mais provider non supporté")
+            self._last_mfa_status = "failed"
+            raise RuntimeError("MFA required but provider not supported")
         if not self.totp_secret:
-            raise RuntimeError("MFA requis mais PASSBOLT_API_TOTP_SECRET absent")
+            self._last_mfa_status = "failed"
+            raise RuntimeError("MFA required but PASSBOLT_API_TOTP_SECRET is missing")
+
+        self._log("info", "TOTP generated")
         code = pyotp.TOTP(self.totp_secret.replace(" ", "")).now()
+        self._log("info", "Calling /mfa/verify/totp.json")
         status, payload, raw, _ = self._request_json("POST", "/mfa/verify/totp.json", {"totp": code})
         if status >= 400:
+            self._last_mfa_status = "failed"
+            self._log("error", "MFA verification failed: invalid TOTP", status=status)
             raise RuntimeError(_extract_message(payload, raw or "MFA verification failed: invalid TOTP"))
+        self._last_mfa_status = "verified"
+        self._log("info", "MFA verification succeeded")
+        return "verified"
 
     def authenticate(self) -> dict[str, Any]:
         if self.auth_mode != "jwt":
@@ -216,68 +294,73 @@ class PassboltApiAuthService:
         if not self.enabled():
             raise RuntimeError("Passbolt API is not configured")
 
+        self._log("info", "Starting Passbolt JWT authentication")
         gpg = self._gpg()
+
         server_public_key = self._fetch_server_public_key()
+
         verify_token = secrets.token_urlsafe(32)
+        self._last_verify_token = verify_token
         challenge = {
             "version": "1.0.0",
             "domain": self.base_url,
             "verify_token": verify_token,
             "verify_token_expiry": _now_plus(5),
         }
+        self._log("info", "JWT challenge generated")
+
         signed = gpg.sign(json.dumps(challenge), clearsign=False, detach=True, passphrase=self.passphrase)
         if not signed:
             raise RuntimeError("Signature du challenge JWT impossible")
-        envelope = {
-            "user_id": self.user_id,
-            "challenge": challenge,
-            "challenge_signature": str(signed),
-        }
-        encrypted = self._encrypt_for_server(gpg, json.dumps(envelope), server_public_key)
+        self._log("info", "JWT challenge signed")
 
+        envelope = {"user_id": self.user_id, "challenge": challenge, "challenge_signature": str(signed)}
+        encrypted = self._encrypt_for_server(gpg, json.dumps(envelope), server_public_key)
+        self._log("info", "JWT challenge encrypted")
+
+        self._log("info", "JWT login request sent")
         status, login_payload, raw, _ = self._request_json("POST", "/auth/jwt/login.json", {"challenge": encrypted, "user_id": self.user_id})
         if status >= 400 or status == 0:
             raise RuntimeError(_extract_message(login_payload, raw or f"JWT login failed HTTP {status}"))
 
-        body = login_payload.get("body") if isinstance(login_payload, dict) else None
-        decrypted_raw = ""
-        if isinstance(body, str) and "BEGIN PGP MESSAGE" in body:
-            decrypted_raw = self._decrypt_payload(gpg, body)
-        elif isinstance(body, dict):
-            decrypted_raw = json.dumps(body)
-        else:
-            decrypted_raw = json.dumps(login_payload)
-
-        token_payload = json.loads(decrypted_raw)
+        token_payload = self._extract_token_payload(gpg, login_payload)
         returned_verify_token = token_payload.get("verify_token")
-        if returned_verify_token and returned_verify_token != verify_token:
+        if returned_verify_token != verify_token:
             raise RuntimeError("verify_token mismatch")
+        self._log("info", "verify_token validated")
 
         access_token = token_payload.get("access_token") or token_payload.get("token")
         refresh_token = token_payload.get("refresh_token")
         if not access_token:
             raise RuntimeError("Missing access_token after JWT login")
-        self._tokens = {"access_token": access_token, "refresh_token": refresh_token}
+        self._log("info", "access_token extracted")
+
+        self._tokens = {
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "mfa_status": self._verify_mfa_if_required(token_payload),
+        }
         self._session.headers.update({"Authorization": f"Bearer {access_token}"})
-        self._verify_mfa_if_required(token_payload)
         return self._tokens
 
     def run_diagnostic(self) -> dict[str, Any]:
         steps = [
-            DiagnosticStep("config", "Validation de la configuration minimale"),
+            DiagnosticStep("config", "Présence de la configuration minimale"),
             DiagnosticStep("network", "Accessibilité réseau de l'URL Passbolt"),
             DiagnosticStep("tls", "Validation TLS / CA bundle"),
-            DiagnosticStep("verify", "Appel de /auth/verify.json"),
+            DiagnosticStep("healthcheck_status", "GET /healthcheck/status.json"),
+            DiagnosticStep("verify", "GET /auth/verify.json"),
             DiagnosticStep("server_key", "Récupération de la clé publique serveur"),
             DiagnosticStep("private_key", "Lecture de la clé privée locale"),
-            DiagnosticStep("challenge", "Génération / signature / chiffrement du challenge JWT"),
-            DiagnosticStep("jwt_login", "Login JWT"),
+            DiagnosticStep("challenge", "Génération du challenge JWT"),
+            DiagnosticStep("sign", "Signature du challenge JWT"),
+            DiagnosticStep("encrypt", "Chiffrement du challenge JWT"),
+            DiagnosticStep("jwt_login", "Login JWT /auth/jwt/login.json"),
             DiagnosticStep("verify_token", "Validation du verify_token"),
-            DiagnosticStep("mfa", "Validation MFA"),
-            DiagnosticStep("authenticated", "Test endpoint protégé /auth/is-authenticated.json"),
-            DiagnosticStep("groups", "Accès /groups.json"),
-            DiagnosticStep("healthcheck", "Accès /healthcheck.json"),
-            DiagnosticStep("permissions", "Vérification permissions groupes/suppression"),
+            DiagnosticStep("mfa", "MFA (TOTP si requis)"),
+            DiagnosticStep("authenticated", "GET /auth/is-authenticated.json"),
+            DiagnosticStep("groups", "GET /groups.json"),
+            DiagnosticStep("healthcheck", "GET /healthcheck.json"),
         ]
         report = {"overall_status": "error", "steps": []}
 
@@ -309,106 +392,116 @@ class PassboltApiAuthService:
 
             s = steps[2]; s.start()
             if self.verify_setting is False:
-                s.done("warning", "Validation TLS désactivée", details={"verify": False}, remediation="Activer PASSBOLT_API_VERIFY_TLS et configurer PASSBOLT_API_CA_BUNDLE")
-            elif isinstance(self.verify_setting, str) and not os.path.exists(self.verify_setting):
-                s.done("error", "CA bundle introuvable", details={"ca_bundle": self.verify_setting}, remediation="Corriger PASSBOLT_API_CA_BUNDLE")
-                return finalize()
+                s.done("warning", "Validation TLS désactivée", details={"verify": False}, remediation="Activer PASSBOLT_API_VERIFY_TLS")
+            elif isinstance(self.verify_setting, str):
+                if not os.path.exists(self.verify_setting):
+                    s.done("error", "CA bundle introuvable", details={"ca_bundle": self.verify_setting}, remediation="Corriger PASSBOLT_API_CA_BUNDLE")
+                    return finalize()
+                if not os.access(self.verify_setting, os.R_OK):
+                    s.done("error", "CA bundle illisible", details={"ca_bundle": self.verify_setting}, remediation="Rendre le CA bundle lisible")
+                    return finalize()
+                s.done("success", "CA bundle valide", details={"ca_bundle": self.verify_setting})
             else:
-                s.done("success", "Connexion TLS réussie", details={"verify": self.verify_setting})
+                s.done("success", "Validation TLS système active", details={"verify": True})
 
             s = steps[3]; s.start()
-            status, payload, raw, _ = self._request_json("GET", "/auth/verify.json")
+            status, payload, raw, _ = self._request_json("GET", "/healthcheck/status.json")
+            if status >= 400 or status == 0:
+                s.done("error", "/healthcheck/status.json inaccessible", http_status=status or None, endpoint="/healthcheck/status.json", details={"error": _extract_message(payload, raw)})
+                return finalize()
+            s.done("success", "/healthcheck/status.json accessible", http_status=status, endpoint="/healthcheck/status.json")
+
+            s = steps[4]; s.start()
+            status, payload, raw, verify_response = self._request_json("GET", "/auth/verify.json")
             if status >= 400 or status == 0:
                 s.done("error", "/auth/verify.json inaccessible", http_status=status or None, endpoint="/auth/verify.json", details={"error": _extract_message(payload, raw)})
                 return finalize()
             s.done("success", "/auth/verify.json accessible", http_status=status, endpoint="/auth/verify.json")
 
-            s = steps[4]; s.start()
-            server_key = self._fetch_server_public_key()
+            s = steps[5]; s.start()
+            key_or_url = self._extract_pgp_public_key(payload, verify_response)
+            if "BEGIN PGP PUBLIC KEY BLOCK" in key_or_url:
+                server_key = key_or_url
+            else:
+                key_resp = self._session.get(key_or_url, timeout=self.timeout, verify=self.verify_setting)
+                if not key_resp.ok:
+                    s.done("error", "Récupération clé publique serveur impossible", endpoint=key_or_url, http_status=key_resp.status_code)
+                    return finalize()
+                server_key = key_resp.text
             s.done("success", "Clé publique serveur récupérée", details={"length": len(server_key)})
 
-            s = steps[5]; s.start()
+            s = steps[6]; s.start()
             gpg = self._gpg()
-            s.done("success", "Clé privée API chargée")
+            s.done("success", "Clé privée locale chargée")
 
             verify_token = secrets.token_urlsafe(32)
             challenge_payload = {"version": "1.0.0", "domain": self.base_url, "verify_token": verify_token, "verify_token_expiry": _now_plus(5)}
+            s = steps[7]; s.start(); s.done("success", "Challenge JWT généré", details={"fields": list(challenge_payload.keys())})
 
-            s = steps[6]; s.start()
+            s = steps[8]; s.start()
             signed = gpg.sign(json.dumps(challenge_payload), clearsign=False, detach=True, passphrase=self.passphrase)
             if not signed:
                 s.done("error", "Signature challenge JWT échouée")
                 return finalize()
-            encrypted = self._encrypt_for_server(gpg, json.dumps({"user_id": self.user_id, "challenge": challenge_payload, "challenge_signature": str(signed)}), server_key)
-            s.done("success", "Challenge JWT généré")
+            s.done("success", "Challenge JWT signé")
 
-            s = steps[7]; s.start()
+            s = steps[9]; s.start()
+            encrypted = self._encrypt_for_server(gpg, json.dumps({"user_id": self.user_id, "challenge": challenge_payload, "challenge_signature": str(signed)}), server_key)
+            s.done("success", "Challenge JWT chiffré", details={"size": len(encrypted)})
+
+            s = steps[10]; s.start()
             status, login_payload, raw, _ = self._request_json("POST", "/auth/jwt/login.json", {"challenge": encrypted, "user_id": self.user_id})
             if status >= 400 or status == 0:
                 s.done("error", "JWT login échoué", http_status=status or None, endpoint="/auth/jwt/login.json", details={"error": _extract_message(login_payload, raw)})
                 return finalize()
-            s.done("success", "Authentification API réussie", http_status=status, endpoint="/auth/jwt/login.json")
+            s.done("success", "JWT login réussi", http_status=status, endpoint="/auth/jwt/login.json")
 
-            body = login_payload.get("body") if isinstance(login_payload, dict) else None
-            if isinstance(body, str) and "BEGIN PGP MESSAGE" in body:
-                token_payload = json.loads(self._decrypt_payload(gpg, body))
-            elif isinstance(body, dict):
-                token_payload = body
-            else:
-                token_payload = login_payload
-
-            s = steps[8]; s.start()
-            response_verify_token = token_payload.get("verify_token")
-            if response_verify_token and response_verify_token != verify_token:
-                s.done("error", "verify_token mismatch", details={"sent": verify_token, "received": response_verify_token})
-                return finalize()
-            s.done("success", "verify_token validé")
-
-            access_token = token_payload.get("access_token") or token_payload.get("token")
-            if not access_token:
-                steps[7].status = "error"
-                steps[7].message = "Réponse login sans access_token"
-                return finalize()
-            self._session.headers.update({"Authorization": f"Bearer {access_token}"})
-
-            s = steps[9]; s.start()
-            try:
-                self._verify_mfa_if_required(token_payload)
-                if token_payload.get("mfa_providers"):
-                    s.done("success", "MFA TOTP validé")
-                else:
-                    s.done("skipped", "MFA non requis")
-            except Exception as error:
-                s.done("error", str(error), remediation="Vérifier PASSBOLT_API_TOTP_SECRET")
-                return finalize()
-
-            s = steps[10]; s.start()
-            status, payload, raw, _ = self._request_json("GET", "/auth/is-authenticated.json")
-            if status >= 400 or status == 0:
-                s.done("warning", "Endpoint /auth/is-authenticated.json indisponible", http_status=status or None, endpoint="/auth/is-authenticated.json", details={"error": _extract_message(payload, raw)})
-            else:
-                s.done("success", "Session authentifiée", http_status=status, endpoint="/auth/is-authenticated.json")
+            token_payload = self._extract_token_payload(gpg, login_payload)
 
             s = steps[11]; s.start()
+            if token_payload.get("verify_token") != verify_token:
+                s.done("error", "verify_token mismatch", details={"sent": verify_token, "received": token_payload.get("verify_token")})
+                return finalize()
+            access_token = token_payload.get("access_token") or token_payload.get("token")
+            if not access_token:
+                s.done("error", "Access token absent")
+                return finalize()
+            self._session.headers.update({"Authorization": f"Bearer {access_token}"})
+            s.done("success", "verify_token validé")
+
+            s = steps[12]; s.start()
+            try:
+                mfa_result = self._verify_mfa_if_required(token_payload)
+                if mfa_result == "not_required":
+                    s.done("success", "MFA non requise")
+                else:
+                    s.done("success", "MFA TOTP validée")
+            except Exception as error:
+                s.done("error", str(error), remediation="Configurer PASSBOLT_API_TOTP_SECRET et vérifier /mfa/verify/totp.json")
+                return finalize()
+
+            s = steps[13]; s.start()
+            status, payload, raw, _ = self._request_json("GET", "/auth/is-authenticated.json")
+            if status >= 400 or status == 0:
+                s.done("error", "Session non authentifiée", http_status=status or None, endpoint="/auth/is-authenticated.json", details={"error": _extract_message(payload, raw)})
+                return finalize()
+            s.done("success", "Session authentifiée", http_status=status, endpoint="/auth/is-authenticated.json")
+
+            s = steps[14]; s.start()
             status, payload, raw, _ = self._request_json("GET", "/groups.json")
             if status >= 400 or status == 0:
                 s.done("error", "Accès /groups.json refusé", http_status=status or None, endpoint="/groups.json", details={"error": _extract_message(payload, raw)}, remediation="Vérifier permissions du compte API")
                 return finalize()
             s.done("success", "/groups.json accessible", http_status=status, endpoint="/groups.json")
 
-            s = steps[12]; s.start()
+            s = steps[15]; s.start()
             status, payload, raw, _ = self._request_json("GET", "/healthcheck.json")
-            if status >= 400 or status == 0:
-                s.done("warning", "/healthcheck.json inaccessible à ce rôle", http_status=status or None, endpoint="/healthcheck.json", details={"error": _extract_message(payload, raw)})
+            if status in (401, 403):
+                s.done("warning", "/healthcheck.json inaccessible pour ce rôle", http_status=status, endpoint="/healthcheck.json", details={"error": _extract_message(payload, raw)}, remediation="Utiliser un rôle administrateur si le healthcheck détaillé est requis")
+            elif status >= 400 or status == 0:
+                s.done("error", "/healthcheck.json inaccessible", http_status=status or None, endpoint="/healthcheck.json", details={"error": _extract_message(payload, raw)})
             else:
                 s.done("success", "/healthcheck.json accessible", http_status=status, endpoint="/healthcheck.json")
-
-            s = steps[13]; s.start()
-            status, payload, raw, _ = self._request_json("DELETE", f"/groups/{quote('00000000-0000-0000-0000-000000000000')}/dry-run.json")
-            if status in (401, 403):
-                s.done("error", "Compte API authentifié mais permissions insuffisantes", http_status=status, endpoint="/groups/{id}/dry-run.json", details={"error": _extract_message(payload, raw)})
-            else:
-                s.done("success", "Permissions API groupes/suppression vérifiables", http_status=status or None)
         except Exception as error:
             for step in steps:
                 if step.started_at and not step.finished_at:
@@ -420,8 +513,6 @@ class PassboltApiAuthService:
 class PassboltGroupService:
     def __init__(self, auth_service: PassboltApiAuthService) -> None:
         self.auth = auth_service
-        self.session = auth_service._session
-        self.base_url = auth_service.base_url
 
     def enabled(self) -> bool:
         return self.auth.enabled()
@@ -433,7 +524,8 @@ class PassboltGroupService:
         status, data, raw, _ = self.auth._request_json(method, path, payload)
         return status, data, _extract_message(data, raw)
 
-    def _extract_items(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
+    @staticmethod
+    def _extract_items(payload: dict[str, Any]) -> list[dict[str, Any]]:
         body = payload.get("body") if isinstance(payload, dict) else None
         if isinstance(body, list):
             return [x for x in body if isinstance(x, dict)]
@@ -475,15 +567,28 @@ class PassboltGroupService:
                 return item
         return None
 
-    def assign_user_to_group(self, user_id: str, group_id: str) -> dict[str, Any]:
+    def assign_user_to_group(self, user_id: str, group_id: str, is_admin: bool = False) -> dict[str, Any]:
         status, payload, message = self._request("GET", f"/groups/{group_id}.json")
         if status >= 400:
             return {"returncode": 1, "stdout": "", "stderr": message}
         body = payload.get("body") if isinstance(payload, dict) and isinstance(payload.get("body"), dict) else payload
         members = body.get("groups_users") if isinstance(body, dict) and isinstance(body.get("groups_users"), list) else []
-        if any(str(member.get("user_id")) == str(user_id) and not member.get("delete") for member in members if isinstance(member, dict)):
+
+        existing_member: dict[str, Any] | None = None
+        for member in members:
+            if isinstance(member, dict) and str(member.get("user_id")) == str(user_id):
+                existing_member = member
+                break
+
+        if existing_member and not existing_member.get("delete"):
             return {"returncode": 0, "stdout": "already assigned", "stderr": ""}
-        members.append({"user_id": user_id, "is_admin": False})
+
+        if existing_member and existing_member.get("delete"):
+            existing_member["delete"] = False
+            existing_member["is_admin"] = bool(is_admin)
+        else:
+            members.append({"user_id": user_id, "is_admin": bool(is_admin)})
+
         update_payload = {"name": body.get("name"), "groups_users": members}
         status, _, message = self._request("PUT", f"/groups/{group_id}.json", update_payload)
         return {"returncode": 0 if status < 300 else 1, "stdout": "assigned" if status < 300 else "", "stderr": "" if status < 300 else message}
@@ -492,7 +597,6 @@ class PassboltGroupService:
 class PassboltDeleteService:
     def __init__(self, auth_service: PassboltApiAuthService) -> None:
         self.auth = auth_service
-        self.session = auth_service._session
 
     def enabled(self) -> bool:
         return self.auth.enabled()
@@ -504,7 +608,8 @@ class PassboltDeleteService:
         status, payload, raw, _ = self.auth._request_json(method, path)
         return status, payload, _extract_message(payload, raw)
 
-    def _extract_items(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
+    @staticmethod
+    def _extract_items(payload: dict[str, Any]) -> list[dict[str, Any]]:
         body = payload.get("body") if isinstance(payload, dict) else None
         if isinstance(body, list):
             return [x for x in body if isinstance(x, dict)]
