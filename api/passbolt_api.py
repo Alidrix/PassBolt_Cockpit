@@ -164,13 +164,16 @@ class PassboltApiAuthService:
             "--yes",
             "--pinentry-mode",
             "loopback",
+            "--no-tty",
             "--armor",
             "--detach-sign",
             "--local-user",
             fingerprint,
         ]
+        stdin_data: bytes | None = None
         if self.passphrase:
-            command.extend(["--passphrase", self.passphrase])
+            command.extend(["--passphrase-fd", "0"])
+            stdin_data = f"{self.passphrase}\n".encode("utf-8")
 
         with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", delete=False, suffix=".json") as challenge_file:
             challenge_file.write(json_payload)
@@ -182,9 +185,11 @@ class PassboltApiAuthService:
         details: dict[str, Any] = {
             "fingerprint": fingerprint,
             "method": "gpg_subprocess_detach_sign",
+            "gpg_args": command[1:],
             "batch": True,
             "pinentry_mode": "loopback",
             "passphrase_provided": bool(self.passphrase),
+            "passphrase_delivery": "passphrase-fd" if self.passphrase else "none",
             "gpg_home": gpg_home,
             "challenge_size": len(json_payload),
             "challenge_type": "application/json",
@@ -197,10 +202,16 @@ class PassboltApiAuthService:
         }
 
         try:
-            proc = subprocess.run(command, capture_output=True, text=True, timeout=max(self.timeout, 30), check=False)
+            proc = subprocess.run(
+                command,
+                input=stdin_data,
+                capture_output=True,
+                timeout=max(self.timeout, 30),
+                check=False,
+            )
             details["returncode"] = proc.returncode
-            details["stderr"] = (proc.stderr or "").strip()
-            details["stdout"] = (proc.stdout or "").strip()
+            details["stderr"] = (proc.stderr or b"").decode("utf-8", errors="replace").strip()
+            details["stdout"] = (proc.stdout or b"").decode("utf-8", errors="replace").strip()
 
             if proc.returncode != 0:
                 raise RuntimeError(details["stderr"] or f"gpg exited with code {proc.returncode}")
@@ -566,7 +577,7 @@ class PassboltApiAuthService:
 
         def finalize() -> dict[str, Any]:
             report["steps"] = [s.to_dict() for s in steps]
-            required_success = {"sign", "encrypt", "jwt_login", "verify_token"}
+            required_success = {"sign", "encrypt", "jwt_login", "verify_token", "authenticated", "groups", "mfa_totp"}
             required_statuses = {s.id: s.status for s in steps if s.id in required_success}
             if any(s.status == "error" for s in steps):
                 report["overall_status"] = "error"
@@ -705,7 +716,7 @@ class PassboltApiAuthService:
                 body = token_payload.get("body") if isinstance(token_payload.get("body"), dict) else {}
                 providers = body.get("mfa_providers")
             if providers:
-                s.done("warning", "MFA required", details={"providers": providers})
+                s.done("success", "MFA requise", details={"providers": providers})
             else:
                 s.done("success", "MFA non requise")
 
