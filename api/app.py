@@ -45,11 +45,13 @@ try:
         PassboltApiAuthService as PassboltApiAuthServiceV2,
         PassboltDeleteService as PassboltDeleteServiceV2,
         PassboltGroupService as PassboltGroupServiceV2,
+        parse_dry_run_details as parse_dry_run_details_v2,
     )
 except ImportError as error:
     PassboltApiAuthServiceV2 = None
     PassboltDeleteServiceV2 = None
     PassboltGroupServiceV2 = None
+    parse_dry_run_details_v2 = None
     PASSBOLT_API_MODULE_ERROR = str(error)
 
 app = Flask(__name__)
@@ -418,105 +420,6 @@ def create_user(email: str, first: str, last: str, role: str, container_name: st
     return result
 
 
-class PassboltGroupService:
-    def __init__(self, auth_service: "PassboltApiAuthService") -> None:
-        self.auth = auth_service
-        self.session = auth_service._session
-        self.base_url = auth_service.base_url
-
-    def enabled(self) -> bool:
-        return self.auth.enabled()
-
-    def authenticate(self) -> dict[str, Any]:
-        return self.auth.authenticate()
-
-    def _request(self, method: str, path: str, payload: dict[str, Any] | None = None) -> tuple[int, dict[str, Any], str]:
-        try:
-            response = self.session.request(
-                method,
-                f"{self.base_url}{path}",
-                json=payload,
-                timeout=self.auth.timeout,
-                verify=self.auth.verify_setting,
-                headers={"Accept": "application/json", "Content-Type": "application/json", **dict(self.session.headers)},
-            )
-            data: dict[str, Any] = {}
-            try:
-                data = response.json() if response.text else {}
-            except Exception:
-                data = {}
-            message = ""
-            if isinstance(data, dict):
-                message = str(data.get("message") or data.get("error") or "")
-            if not message:
-                message = response.text.strip()[:500]
-            return response.status_code, data, message
-        except requests.RequestException as error:
-            return 502, {}, _classify_request_error(error)
-
-    def _extract_items(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
-        if isinstance(payload, dict):
-            body = payload.get("body")
-            if isinstance(body, list):
-                return [x for x in body if isinstance(x, dict)]
-            if isinstance(body, dict):
-                for key in ("items", "data", "groups", "users"):
-                    value = body.get(key)
-                    if isinstance(value, list):
-                        return [x for x in value if isinstance(x, dict)]
-            for key in ("items", "data", "groups", "users"):
-                value = payload.get(key)
-                if isinstance(value, list):
-                    return [x for x in value if isinstance(x, dict)]
-        return []
-
-    def list_groups(self) -> dict[str, Any]:
-        status, payload, message = self._request("GET", "/groups.json")
-        groups = self._extract_items(payload)
-        if status >= 400:
-            return {"result": {"returncode": 1, "stderr": message, "stdout": ""}, "groups": set(), "items": []}
-        names = set()
-        for item in groups:
-            name = str(item.get("name") or "").strip()
-            if name:
-                names.add(name)
-        return {"result": {"returncode": 0, "stderr": "", "stdout": "ok"}, "groups": names, "items": groups}
-
-    def get_group_by_name(self, name: str) -> dict[str, Any] | None:
-        group_name = _sanitize_group_name(name)
-        status, payload, message = self._request("GET", f"/groups.json?filter[search]={requests.utils.quote(group_name)}")
-        if status >= 400:
-            raise RuntimeError(message or f"group lookup failed HTTP {status}")
-        for item in self._extract_items(payload):
-            if str(item.get("name") or "").strip().lower() == group_name.lower():
-                return item
-        return None
-
-    def create_group(self, group_name: str) -> dict[str, Any]:
-        cleaned = _sanitize_group_name(group_name)
-        status, _, message = self._request("POST", "/groups.json", {"name": cleaned})
-        if status < 300:
-            return {"returncode": 0, "stdout": "created", "stderr": ""}
-        return {"returncode": 1, "stdout": "", "stderr": message or "creation failed"}
-
-    def find_user_by_email(self, email: str) -> dict[str, Any] | None:
-        address = _sanitize_value("email", email).lower()
-        status, payload, message = self._request("GET", f"/users.json?filter[search]={requests.utils.quote(address)}")
-        if status >= 400:
-            raise RuntimeError(message or f"user lookup failed HTTP {status}")
-        for item in self._extract_items(payload):
-            username = str(item.get("username") or item.get("email") or "").lower()
-            if username == address:
-                return item
-        return None
-
-    def assign_user_to_group(self, user_id: str, group_id: str) -> dict[str, Any]:
-        payload = {"user_id": user_id}
-        status, _, message = self._request("POST", f"/groups/{group_id}/users.json", payload)
-        if status < 300:
-            return {"returncode": 0, "stdout": "assigned", "stderr": ""}
-        return {"returncode": 1, "stdout": "", "stderr": message or "assignment failed"}
-
 
 def _extract_activation_link(stdout: str) -> str | None:
     match = re.search(r"https?://\S+", stdout or "")
@@ -658,449 +561,6 @@ def _classify_request_error(error: Exception) -> str:
     return raw
 
 
-class PassboltApiAuthService:
-    def __init__(self) -> None:
-        self.base_url = PASSBOLT_API_BASE_URL or PASSBOLT_URL
-        self.auth_mode = PASSBOLT_API_AUTH_MODE
-        self.user_id = PASSBOLT_API_USER_ID
-        self.private_key_path = PASSBOLT_API_PRIVATE_KEY_PATH
-        self.passphrase = PASSBOLT_API_PASSPHRASE
-        self.verify_tls = PASSBOLT_API_VERIFY_TLS
-        self.ca_bundle = PASSBOLT_API_CA_BUNDLE
-        self.verify_setting = get_requests_verify_value()
-        self.mfa_provider = PASSBOLT_API_MFA_PROVIDER
-        self.totp_secret = PASSBOLT_API_TOTP_SECRET
-        self.timeout = PASSBOLT_API_TIMEOUT
-        self.debug = PASSBOLT_API_DEBUG
-        self._session = requests.Session()
-        self._server_fingerprint: str | None = None
-        self._tokens: dict[str, Any] = {}
-
-    def config_status(self) -> dict[str, Any]:
-        tls = get_tls_diagnostics()
-        checks = {
-            "base_url": bool(self.base_url),
-            "auth_mode": self.auth_mode == "jwt",
-            "user_id": bool(self.user_id),
-            "private_key_path": bool(self.private_key_path),
-            "private_key_exists": bool(self.private_key_path and os.path.exists(self.private_key_path)),
-            "passphrase": bool(self.passphrase),
-            "mfa_provider": self.mfa_provider == "totp",
-            "totp_secret": bool(self.totp_secret),
-            "ca_bundle_configured": tls["ca_bundle_configured"],
-            "ca_bundle_exists": tls["ca_bundle_exists"],
-        }
-        base_config_ok = all(checks[name] for name in (
-            "base_url",
-            "auth_mode",
-            "user_id",
-            "private_key_path",
-            "private_key_exists",
-            "passphrase",
-            "mfa_provider",
-            "totp_secret",
-        ))
-        tls_ok = checks["ca_bundle_exists"] or (not checks["ca_bundle_configured"] and self.verify_setting is not False) or (self.verify_setting is False)
-        configured = base_config_ok and tls_ok
-        missing = [name for name, ok in checks.items() if not ok]
-        message = "Passbolt delete API is fully configured" if configured else (
-            "Configuration incomplète: " + ", ".join(missing)
-        )
-        if self.verify_setting is False:
-            message = f"{message}. TLS verification disabled (debug mode)"
-        elif checks["ca_bundle_configured"] and not checks["ca_bundle_exists"]:
-            message = f"{message}. CA bundle file not found: {self.ca_bundle}"
-
-        return {
-            "configured": configured,
-            "checks": checks,
-            "tls": {
-                "verify_mode": tls["verify_mode"],
-            },
-            "message": message,
-            "auth_mode_value": self.auth_mode,
-            "private_key_path_value": self.private_key_path,
-            "mfa_provider_value": self.mfa_provider,
-            "verify_tls_value": self.verify_tls,
-            "ca_bundle_path_value": self.ca_bundle,
-            "timeout": self.timeout,
-        }
-
-    def enabled(self) -> bool:
-        return bool(self.config_status().get("configured"))
-
-    def _log_auth_event(self, level: str, message: str, **payload: Any) -> None:
-        _save_live_log("auth", level, message, event_code="auth.debug", payload=payload or None)
-
-    @staticmethod
-    def _looks_like_pgp_public_key(value: Any) -> bool:
-        return isinstance(value, str) and "BEGIN PGP PUBLIC KEY BLOCK" in value
-
-    def _extract_server_public_key_from_payload(self, payload: dict[str, Any]) -> str | None:
-        candidates: list[Any] = [payload, payload.get("body") if isinstance(payload, dict) else None]
-        for candidate in candidates:
-            if isinstance(candidate, dict):
-                fingerprint = candidate.get("fingerprint")
-                if isinstance(fingerprint, str) and fingerprint:
-                    self._server_fingerprint = fingerprint
-                for key in ("keydata", "public_key", "server_public_key", "armored_key", "key"):
-                    value = candidate.get(key)
-                    if self._looks_like_pgp_public_key(value):
-                        self._log_auth_event("info", "Server public key found inline in /auth/verify.json payload", source_key=key)
-                        return value
-        return None
-
-    def _download_server_public_key(self, pubkey_url: str) -> str | None:
-        self._log_auth_event("info", "Downloading server public key from URL", strategy="header_pubkey_url", pubkey_url=pubkey_url)
-        try:
-            pubkey_response = self._session.get(
-                pubkey_url,
-                timeout=self.timeout,
-                verify=self.verify_setting,
-                headers={"Accept": "text/plain, application/pgp-keys, application/octet-stream"},
-            )
-        except requests.RequestException as error:
-            message = _classify_request_error(error)
-            self._log_auth_event("error", "Failed to download server public key from header URL", strategy="header_pubkey_url", pubkey_url=pubkey_url, error=message)
-            raise RuntimeError(f"Unable to download Passbolt server public key from {pubkey_url}: {message}") from error
-
-        self._log_auth_event("info", "Server public key URL response received", strategy="header_pubkey_url", pubkey_url=pubkey_url, status_code=pubkey_response.status_code)
-        if pubkey_response.status_code >= 400:
-            body = (pubkey_response.text or "")[:500]
-            self._log_auth_event("error", "Server public key URL returned an error", strategy="header_pubkey_url", pubkey_url=pubkey_url, status_code=pubkey_response.status_code, body=body)
-            return None
-
-        pubkey_text = (pubkey_response.text or "").strip()
-        if self._looks_like_pgp_public_key(pubkey_text):
-            self._log_auth_event("info", "Server public key downloaded successfully", strategy="header_pubkey_url", pubkey_url=pubkey_url, key_size=len(pubkey_text))
-            return pubkey_text
-
-        self._log_auth_event("error", "Downloaded server public key does not contain an armored PGP key", strategy="header_pubkey_url", pubkey_url=pubkey_url, key_size=len(pubkey_text))
-        return None
-
-    def _request_json(self, method: str, path: str, json_payload: dict[str, Any] | None = None) -> tuple[int, dict[str, Any], str]:
-        response = self._session.request(
-            method,
-            f"{self.base_url}{path}",
-            json=json_payload,
-            timeout=self.timeout,
-            verify=self.verify_setting,
-            headers={"Accept": "application/json", "Content-Type": "application/json"},
-        )
-        data: dict[str, Any] = {}
-        try:
-            data = response.json() if response.text else {}
-        except Exception:
-            data = {}
-        return response.status_code, data, response.text[:500]
-
-    def _fetch_server_public_key(self) -> str:
-        verify_url = f"{self.base_url}/auth/verify.json"
-        self._log_auth_event("info", "Calling Passbolt auth verify endpoint", url=verify_url)
-
-        try:
-            response = self._session.get(
-                verify_url,
-                timeout=self.timeout,
-                verify=self.verify_setting,
-                headers={"Accept": "application/json"},
-            )
-        except requests.RequestException as error:
-            message = _classify_request_error(error)
-            self._log_auth_event("error", "Failed to call /auth/verify.json", error=message)
-            raise RuntimeError(f"Unable to call /auth/verify.json: {message}") from error
-
-        self._log_auth_event("info", "Received /auth/verify.json response", status_code=response.status_code)
-
-        payload: dict[str, Any] = {}
-        try:
-            payload = response.json() if response.text else {}
-        except Exception as error:
-            self._log_auth_event("error", "Unable to parse /auth/verify.json response", error=str(error), raw_body=(response.text or "")[:500])
-            payload = {}
-
-        if response.status_code >= 400:
-            error_msg = (response.text or "")[:500]
-            self._log_auth_event("error", "Passbolt /auth/verify.json returned an error", status_code=response.status_code, body=error_msg)
-            raise RuntimeError(error_msg or f"Unable to call /auth/verify.json HTTP {response.status_code}")
-
-        body_payload = payload.get("body") if isinstance(payload, dict) and isinstance(payload.get("body"), dict) else {}
-        fingerprint_present = bool(body_payload.get("fingerprint") or payload.get("fingerprint"))
-        keydata_value = body_payload.get("keydata") if isinstance(body_payload, dict) else None
-        keydata_present = self._looks_like_pgp_public_key(keydata_value)
-        useful_headers = {
-            "x-gpgauth-pubkey-url": response.headers.get("x-gpgauth-pubkey-url"),
-            "x-gpgauth-pubkey": response.headers.get("X-GPGAuth-Pubkey"),
-        }
-        self._log_auth_event(
-            "info",
-            "Inspecting /auth/verify.json response for server public key",
-            status_code=response.status_code,
-            headers=useful_headers,
-            fingerprint_present=fingerprint_present,
-            keydata_present=keydata_present,
-        )
-
-        inline_pubkey = self._extract_server_public_key_from_payload(payload)
-        if inline_pubkey:
-            self._log_auth_event("info", "Using inline server public key from /auth/verify.json", strategy="inline_keydata", key_size=len(inline_pubkey))
-            return inline_pubkey
-
-        pubkey_header_url = (response.headers.get("x-gpgauth-pubkey-url") or response.headers.get("X-GPGAuth-Pubkey") or "").strip()
-        self._log_auth_event(
-            "info",
-            "Checked verify headers for server public key URL",
-            x_gpgauth_pubkey_url=response.headers.get("x-gpgauth-pubkey-url"),
-            x_gpgauth_pubkey=response.headers.get("X-GPGAuth-Pubkey"),
-            header_url_present=bool(pubkey_header_url),
-        )
-
-        if pubkey_header_url:
-            pubkey_url = urljoin(f"{self.base_url}/", pubkey_header_url)
-            downloaded_key = self._download_server_public_key(pubkey_url)
-            if downloaded_key:
-                return downloaded_key
-
-        self._log_auth_event("error", "Unable to locate Passbolt server public key in verify header or payload", payload_keys=list(payload.keys()) if isinstance(payload, dict) else [])
-        raise RuntimeError("Unable to retrieve Passbolt server public key after verify payload and header URL fallback attempts")
-
-    def _get_gpg(self) -> gnupg.GPG:
-        gpg = gnupg.GPG(gnupghome="/tmp/gnupg-api")
-        if not self.private_key_path or not os.path.exists(self.private_key_path):
-            raise RuntimeError(f"Private key file not found: {self.private_key_path}")
-        with open(self.private_key_path, "r", encoding="utf-8") as key_file:
-            import_result = gpg.import_keys(key_file.read())
-        if not import_result.fingerprints:
-            raise RuntimeError("Failed to import API private key")
-        return gpg
-
-    def _encrypt_for_server(self, gpg: gnupg.GPG, challenge_json: str, server_public_key: str) -> str:
-        import_result = gpg.import_keys(server_public_key)
-        if not import_result.fingerprints:
-            self._log_auth_event("error", "Failed to import Passbolt server public key", import_results=str(import_result.results))
-            raise RuntimeError("Failed to import Passbolt server public key")
-        recipient = import_result.fingerprints[0]
-        self._log_auth_event("info", "Passbolt server public key imported", fingerprint=recipient)
-        encrypted = gpg.encrypt(challenge_json, recipients=[recipient], always_trust=True)
-        if not encrypted.ok:
-            self._log_auth_event("error", "Unable to encrypt challenge for server", status=str(encrypted.status))
-            raise RuntimeError(f"Unable to encrypt challenge for server: {encrypted.status}")
-        return str(encrypted)
-
-    def _decrypt_payload(self, gpg: gnupg.GPG, armored_payload: str) -> str:
-        decrypted = gpg.decrypt(armored_payload, passphrase=self.passphrase)
-        if not decrypted.ok:
-            raise RuntimeError(f"Unable to decrypt JWT login payload: {decrypted.status}")
-        return str(decrypted)
-
-    def _extract_challenge(self, payload: dict[str, Any]) -> tuple[str, str]:
-        body = payload.get("body") if isinstance(payload, dict) else None
-        source = body if isinstance(body, dict) else payload
-        challenge = (source or {}).get("challenge") or (source or {}).get("challenge_token")
-        challenge_id = (source or {}).get("challenge_id") or (source or {}).get("id")
-        if not challenge:
-            raise RuntimeError("JWT challenge missing in response")
-        return str(challenge), str(challenge_id or "")
-
-    def _verify_mfa_if_required(self, login_payload: dict[str, Any]) -> None:
-        providers = None
-        if isinstance(login_payload, dict):
-            providers = login_payload.get("mfa_providers")
-            body = login_payload.get("body")
-            if not providers and isinstance(body, dict):
-                providers = body.get("mfa_providers")
-        if not providers:
-            return
-        if self.mfa_provider != "totp":
-            raise RuntimeError(f"Unsupported MFA provider: {self.mfa_provider}")
-        if "totp" not in [str(p).lower() for p in providers]:
-            raise RuntimeError("Passbolt requires MFA but TOTP provider is unavailable")
-        code = generate_totp_code(self.totp_secret)
-        status, payload, raw = self._request_json("POST", "/mfa/verify/totp.json", {"totp": code})
-        if status >= 400:
-            message = payload.get("message") if isinstance(payload, dict) else ""
-            raise RuntimeError(message or raw or f"MFA verify failed HTTP {status}")
-
-    def authenticate(self) -> dict[str, Any]:
-        if self.auth_mode != "jwt":
-            raise RuntimeError("Only PASSBOLT_API_AUTH_MODE=jwt is supported")
-        if not self.enabled():
-            raise RuntimeError("Passbolt delete API is not configured")
-
-        server_public_key = self._fetch_server_public_key()
-
-        status, challenge_payload, raw = self._request_json("GET", f"/auth/jwt/rsa-challenge.json?user_id={requests.utils.quote(self.user_id)}")
-        if status >= 400:
-            raise RuntimeError(raw or f"Unable to request JWT challenge HTTP {status}")
-        challenge, challenge_id = self._extract_challenge(challenge_payload)
-
-        gpg = self._get_gpg()
-        signed = gpg.sign(challenge, clearsign=False, detach=True, passphrase=self.passphrase)
-        if not signed:
-            raise RuntimeError("Unable to sign JWT challenge with API private key")
-
-        challenge_document = {
-            "version": "1.0.0",
-            "domain": self.base_url,
-            "verify_token": challenge,
-            "verify_token_signature": str(signed),
-            "user_id": self.user_id,
-        }
-        if challenge_id:
-            challenge_document["challenge_id"] = challenge_id
-
-        try:
-            encrypted_challenge = self._encrypt_for_server(gpg, json.dumps(challenge_document), server_public_key)
-            self._log_auth_event("info", "Challenge encrypted with Passbolt server public key")
-        except Exception as error:
-            self._log_auth_event("error", "Failed to encrypt challenge with Passbolt server public key", error=str(error))
-            raise
-        login_body = {"challenge": encrypted_challenge, "user_id": self.user_id}
-        if challenge_id:
-            login_body["challenge_id"] = challenge_id
-
-        status, login_payload, raw = self._request_json("POST", "/auth/jwt/login.json", login_body)
-        if status >= 400:
-            message = login_payload.get("message") if isinstance(login_payload, dict) else ""
-            raise RuntimeError(message or raw or f"JWT login failed HTTP {status}")
-
-        decrypted_json = ""
-        encrypted_response = login_payload.get("body") if isinstance(login_payload, dict) else None
-        if isinstance(encrypted_response, str) and "BEGIN PGP MESSAGE" in encrypted_response:
-            decrypted_json = self._decrypt_payload(gpg, encrypted_response)
-        elif isinstance(login_payload.get("body"), dict):
-            decrypted_json = json.dumps(login_payload.get("body"))
-        else:
-            decrypted_json = json.dumps(login_payload)
-
-        try:
-            token_payload = json.loads(decrypted_json)
-        except Exception as error:
-            raise RuntimeError(f"Unable to parse JWT login payload: {error}") from error
-
-        self._tokens["access_token"] = token_payload.get("access_token") or token_payload.get("token")
-        self._tokens["refresh_token"] = token_payload.get("refresh_token")
-        if not self._tokens.get("access_token"):
-            raise RuntimeError("Missing access_token after JWT login")
-
-        self._session.headers.update({"Authorization": f"Bearer {self._tokens['access_token']}"})
-        self._verify_mfa_if_required(token_payload)
-        return {"access_token": self._tokens.get("access_token"), "refresh_token": self._tokens.get("refresh_token")}
-
-
-class PassboltDeleteService:
-    def __init__(self, auth_service: PassboltApiAuthService) -> None:
-        self.auth = auth_service
-        self.session = auth_service._session
-        self.base_url = auth_service.base_url
-
-    def enabled(self) -> bool:
-        return self.auth.enabled()
-
-    def authenticate(self) -> dict[str, Any]:
-        return self.auth.authenticate()
-
-    def _request(self, method: str, path: str) -> tuple[int, dict[str, Any], str]:
-        try:
-            response = self.session.request(
-                method,
-                f"{self.base_url}{path}",
-                timeout=self.auth.timeout,
-                verify=self.auth.verify_setting,
-                headers={"Accept": "application/json", "Content-Type": "application/json", **dict(self.session.headers)},
-            )
-            payload: dict[str, Any] = {}
-            try:
-                payload = response.json() if response.text else {}
-            except Exception:
-                payload = {}
-            message = ""
-            if isinstance(payload, dict):
-                message = str(payload.get("message") or payload.get("error") or "")
-                body = payload.get("body")
-                if not message and isinstance(body, dict):
-                    message = str(body.get("message") or body.get("error") or "")
-            if not message:
-                message = response.text.strip()[:500]
-            return response.status_code, payload, message
-        except requests.RequestException as error:
-            return 502, {}, _classify_request_error(error)
-
-    def _extract_items(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
-        if isinstance(payload, list):
-            return [x for x in payload if isinstance(x, dict)]
-        if not isinstance(payload, dict):
-            return []
-        body = payload.get("body")
-        if isinstance(body, list):
-            return [x for x in body if isinstance(x, dict)]
-        if isinstance(body, dict):
-            for key in ("items", "users", "data"):
-                value = body.get(key)
-                if isinstance(value, list):
-                    return [x for x in value if isinstance(x, dict)]
-        for key in ("items", "users", "data"):
-            value = payload.get(key)
-            if isinstance(value, list):
-                return [x for x in value if isinstance(x, dict)]
-        return []
-
-    def find_user_by_email(self, email: str) -> dict[str, Any] | None:
-        status, payload, message = self._request("GET", f"/users.json?filter[search]={requests.utils.quote(email)}")
-        if status >= 400:
-            raise RuntimeError(message or f"lookup failed HTTP {status}")
-        for item in self._extract_items(payload):
-            username = (item.get("username") or item.get("email") or "").lower()
-            if username == email.lower():
-                return item
-        return None
-
-    def get_user(self, user_id: str) -> dict[str, Any] | None:
-        status, payload, message = self._request("GET", f"/users/{user_id}.json")
-        if status >= 400:
-            raise RuntimeError(message or f"get user failed HTTP {status}")
-        body = payload.get("body") if isinstance(payload, dict) else None
-        if isinstance(body, dict):
-            return body
-        return payload if isinstance(payload, dict) else None
-
-    def _resolve_role(self, user_payload: dict[str, Any]) -> str:
-        role = user_payload.get("role")
-        if isinstance(role, dict):
-            role_name = (role.get("name") or role.get("slug") or "").lower()
-            if role_name:
-                return role_name
-        if isinstance(role, str):
-            return role.lower()
-        for key in ("role_name", "role_slug", "actual_role"):
-            value = user_payload.get(key)
-            if isinstance(value, str) and value:
-                return value.lower()
-        return "unknown"
-
-    def _resolve_activation_state(self, user_payload: dict[str, Any], fallback: str | None = None) -> str:
-        disabled = user_payload.get("disabled")
-        active = user_payload.get("active")
-        deleted = user_payload.get("deleted")
-        if deleted in (True, 1, "1"):
-            return "deleted"
-        if disabled in (True, 1, "1"):
-            return "disabled"
-        if active in (True, 1, "1"):
-            return "active"
-        if active in (False, 0, "0"):
-            return "pending"
-        if fallback in DELETE_ACTIVE_STATES:
-            return str(fallback)
-        return (fallback or "unknown").lower()
-
-    def delete_user_dry_run(self, user_id: str) -> tuple[bool, str, dict[str, Any]]:
-        status, payload, message = self._request("DELETE", f"/users/{user_id}/dry-run.json")
-        return status < 300, message, payload
-
-    def delete_user(self, user_id: str) -> tuple[bool, str, dict[str, Any]]:
-        status, payload, message = self._request("DELETE", f"/users/{user_id}.json")
-        return status < 300, message, payload
 
 
 def _build_delete_result(
@@ -1304,20 +764,70 @@ def process_delete_batch(batch_uuid: str, dry_run_only: bool = False, emit: Any 
 
         if emit:
             emit({"type": "progress", "payload": {"current": index, "total": max(total, 1), "percent": round((index / max(total, 1)) * 100, 2), "stage": "dry-run"}})
-        dry_ok, dry_message, _ = service.delete_user_dry_run(user_id)
+        dry_ok, dry_message, dry_payload = service.delete_user_dry_run(user_id)
+        dry_details = parse_dry_run_details_v2(dry_payload) if parse_dry_run_details_v2 else {}
         if not dry_ok:
-            row = _build_delete_result(email, batch_uuid, "BLOCKED_BY_PASSBOLT", message=dry_message or "Dry-run rejected by Passbolt", found=True, user_id=user_id, actual_role=actual_role, activation_state=activation_state, requested_role=requested_role, eligible=False, exclusion_reason="Blocage métier Passbolt", dry_run_status="blocked", dry_run_details=dry_message or "Dry-run rejected by Passbolt")
+            row = _build_delete_result(
+                email,
+                batch_uuid,
+                "BLOCKED_BY_PASSBOLT",
+                message=dry_message or "Dry-run rejected by Passbolt",
+                found=True,
+                user_id=user_id,
+                actual_role=actual_role,
+                activation_state=activation_state,
+                requested_role=requested_role,
+                eligible=False,
+                exclusion_reason="Blocage métier Passbolt",
+                dry_run_status="blocked",
+                dry_run_details=json.dumps(dry_details, ensure_ascii=False) if dry_details else (dry_message or "Dry-run rejected by Passbolt"),
+            )
             results.append(row)
             log_delete_event(batch_uuid, "dry_run", status=row["status"], message=row["message"], email=email)
-            _save_live_log("delete", "warning", row["message"], batch_uuid=batch_uuid, email=email, event_code="delete.dry_run.blocked")
+            _save_live_log("delete", "warning", row["message"], batch_uuid=batch_uuid, email=email, event_code="delete.dry_run.blocked", payload=dry_details or None)
             continue
+
+        groups_to_check = dry_details.get("groups_to_delete") or dry_details.get("groups") or []
+        if isinstance(groups_to_check, list):
+            for group in groups_to_check:
+                if not isinstance(group, dict):
+                    continue
+                group_id = str(group.get("id") or group.get("group_id") or "")
+                if not group_id:
+                    continue
+                group_ok, group_message, group_payload = service.delete_group_dry_run(group_id)
+                if not group_ok:
+                    group_details = parse_dry_run_details_v2(group_payload) if parse_dry_run_details_v2 else {}
+                    row = _build_delete_result(
+                        email,
+                        batch_uuid,
+                        "BLOCKED_BY_PASSBOLT",
+                        message=f"Dry-run groupe bloquant: {group_message}",
+                        found=True,
+                        user_id=user_id,
+                        actual_role=actual_role,
+                        activation_state=activation_state,
+                        requested_role=requested_role,
+                        eligible=False,
+                        exclusion_reason="Blocage dry-run groupe",
+                        dry_run_status="blocked",
+                        dry_run_details=json.dumps({"user": dry_details, "group": group_details}, ensure_ascii=False),
+                    )
+                    results.append(row)
+                    log_delete_event(batch_uuid, "dry_run_group", status=row["status"], message=row["message"], email=email)
+                    _save_live_log("delete", "warning", row["message"], batch_uuid=batch_uuid, email=email, event_code="delete.dry_run.group.blocked", payload={"group_id": group_id, "details": group_details})
+                    break
+            else:
+                pass
+            if results and results[-1].get("email") == email and results[-1].get("status") == "BLOCKED_BY_PASSBOLT":
+                continue
 
         log_delete_event(batch_uuid, "dry_run", status="ok", message="dry-run success", email=email)
         _save_live_log("delete", "audit", "dry-run success", batch_uuid=batch_uuid, email=email, event_code="delete.dry_run.success")
         if emit:
             emit({"type": "stdout", "message": f"dry-run ok: {email}"})
         if dry_run_only:
-            row = _build_delete_result(email, batch_uuid, "DRY_RUN_OK", message="Dry-run ok (preview only)", found=True, user_id=user_id, actual_role=actual_role, activation_state=activation_state, requested_role=requested_role, eligible=True, dry_run_status="ok", dry_run_details="Dry-run validé", final_action_allowed=True)
+            row = _build_delete_result(email, batch_uuid, "DRY_RUN_OK", message="Dry-run ok (preview only)", found=True, user_id=user_id, actual_role=actual_role, activation_state=activation_state, requested_role=requested_role, eligible=True, dry_run_status="ok", dry_run_details=json.dumps(dry_details, ensure_ascii=False) if dry_details else "Dry-run validé", final_action_allowed=True)
             results.append(row)
             continue
 
@@ -1325,14 +835,14 @@ def process_delete_batch(batch_uuid: str, dry_run_only: bool = False, emit: Any 
             emit({"type": "progress", "payload": {"current": index, "total": max(total, 1), "percent": round((index / max(total, 1)) * 100, 2), "stage": "delete"}})
         delete_ok, delete_message, _ = service.delete_user(user_id)
         if not delete_ok:
-            row = _build_delete_result(email, batch_uuid, "ERROR", message=delete_message or "Delete failed", found=True, user_id=user_id, actual_role=actual_role, activation_state=activation_state, requested_role=requested_role, eligible=True, dry_run_status="ok", dry_run_details="Dry-run validé", final_action_allowed=False, exclusion_reason="Erreur suppression réelle")
+            row = _build_delete_result(email, batch_uuid, "ERROR", message=delete_message or "Delete failed", found=True, user_id=user_id, actual_role=actual_role, activation_state=activation_state, requested_role=requested_role, eligible=True, dry_run_status="ok", dry_run_details=json.dumps(dry_details, ensure_ascii=False) if dry_details else "Dry-run validé", final_action_allowed=False, exclusion_reason="Erreur suppression réelle")
             results.append(row)
             log_delete_event(batch_uuid, "delete", status=row["status"], message=row["message"], email=email)
             _save_live_log("delete", "error", row["message"], batch_uuid=batch_uuid, email=email, event_code="delete.execute.error")
             continue
 
         update_user_delete_state(batch_uuid=batch_uuid, email=email, activation_state="deleted", deletable_candidate=0)
-        row = _build_delete_result(email, batch_uuid, "DELETED", message="User deleted", found=True, user_id=user_id, actual_role=actual_role, activation_state="deleted", requested_role=requested_role, eligible=True, dry_run_status="ok", dry_run_details="Dry-run validé", final_action_allowed=False)
+        row = _build_delete_result(email, batch_uuid, "DELETED", message="User deleted", found=True, user_id=user_id, actual_role=actual_role, activation_state="deleted", requested_role=requested_role, eligible=True, dry_run_status="ok", dry_run_details=json.dumps(dry_details, ensure_ascii=False) if dry_details else "Dry-run validé", final_action_allowed=False)
         results.append(row)
         log_delete_event(batch_uuid, "delete", status=row["status"], message=row["message"], email=email)
         _save_live_log("delete", "audit", row["message"], batch_uuid=batch_uuid, email=email, event_code="delete.execute.success")
@@ -1842,6 +1352,7 @@ def delete_config_status() -> Any:
 
 
 @app.route("/passbolt/health", methods=["GET", "POST"])
+@app.route("/api/passbolt/health/run", methods=["POST"])
 @app.route("/api/passbolt/health", methods=["GET", "POST"])
 def passbolt_health() -> Any:
     if PassboltApiAuthServiceV2 is None:

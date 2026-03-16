@@ -33,11 +33,12 @@ function renderSummary(report) {
     <div class="health-pillars">
       ${cell('Connectivité', 'network')}
       ${cell('TLS', 'tls')}
+      ${cell('Healthcheck statut', 'healthcheck_status')}
+      ${cell('Auth verify', 'verify')}
       ${cell('Auth JWT', 'jwt_login')}
       ${cell('MFA', 'mfa')}
       ${cell('Groupes API', 'groups')}
-      ${cell('Suppression API', 'permissions')}
-      ${cell('Healthcheck', 'healthcheck')}
+      ${cell('Healthcheck détaillé', 'healthcheck')}
     </div>
   `;
 }
@@ -62,7 +63,9 @@ export async function refreshPassboltHealth() {
     const report = await apiGet('/api/passbolt/health');
     $('passboltHealthGlobal').innerHTML = statusChip(STEP_COLORS[report.overall_status === 'ok' ? 'success' : report.overall_status] || 'check', `Statut global: ${report.overall_status || 'inconnu'}`);
     $('passboltHealthSummary').innerHTML = renderSummary(report);
-    $('passboltHealthSteps').innerHTML = (report.steps || []).map(renderStep).join('');
+    const steps = report.steps || [];
+    $('passboltHealthSteps').innerHTML = steps.length ? steps.map(renderStep).join('') : '<div class="soft-empty">Aucune étape retournée par le backend.</div>';
+
   } catch (error) {
     setToast(`Diagnostic Passbolt indisponible: ${error.message}`);
   }
