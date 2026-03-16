@@ -15,6 +15,7 @@ const STATUS_META = {
   SKIPPED_ADMIN: { label: 'Admin protégé', tone: 'excluded' },
   SKIPPED_NOT_TOOL_MANAGED: { label: 'Exclu', tone: 'excluded' },
   SKIPPED_ACTIVE_USER: { label: 'Blocage métier Passbolt', tone: 'warn' },
+  BLOCKED_BY_GROUP_DRY_RUN: { label: 'Blocage dry-run groupe', tone: 'danger' },
   NOT_FOUND: { label: 'Introuvable', tone: 'warn' },
   BLOCKED_BY_PASSBOLT: { label: 'Erreur dry-run', tone: 'danger' },
   ERROR: { label: 'Erreur', tone: 'danger' }
@@ -122,10 +123,12 @@ function renderRows(rows) {
       <td>${textCell(row.batch_uuid, 'text-ellipsis')}</td>
       <td><span class="eligibility-tag ${meta.tone}">${meta.label}</span></td>
       <td>${textCell(mapRowReason(row))}</td>
-      <td>${row.final_action_allowed ? '<span class="eligibility-tag good">Autorisée</span>' : '<span class="eligibility-tag neutral">Bloquée</span>'}</td>
+      <td>${textCell(row.dry_run_status || '-')}</td>
+      <td>${textCell(row.dry_run_details || '-')}</td>
+      <td>${row.final_action_allowed ? '<span class=\"eligibility-tag good\">Autorisée</span>' : '<span class=\"eligibility-tag neutral\">Bloquée</span>'}</td>
     </tr>`;
   }).join('');
-  $('deleteAnalysisWrap').innerHTML = `<table><thead><tr><th>Email</th><th>Rôle</th><th>Batch</th><th>Statut</th><th>Raison</th><th>Action</th></tr></thead><tbody>${html}</tbody></table>`;
+  $('deleteAnalysisWrap').innerHTML = `<table><thead><tr><th>Email</th><th>Rôle</th><th>Batch</th><th>Statut</th><th>Raison</th><th>Dry-run</th><th>Détails dry-run</th><th>Action</th></tr></thead><tbody>${html}</tbody></table>`;
 }
 
 function renderSummary(payload) {
