@@ -65,6 +65,19 @@ class PassboltJwtChallengeRegressionTests(unittest.TestCase):
         self.assertFalse(diagnostics["uses_data_parameter"])
         self.assertTrue(diagnostics["challenge_in_body_matches_dump"])
 
+
+    def test_extract_response_challenge_reads_body_challenge(self) -> None:
+        service = self._service()
+
+        payload = {"body": {"challenge": "-----BEGIN PGP MESSAGE-----\nabc\n-----END PGP MESSAGE-----"}}
+
+        self.assertIn("BEGIN PGP MESSAGE", service._extract_response_challenge(payload))
+
+    def test_normalize_domain_ignores_trailing_slash(self) -> None:
+        from passbolt_api import _normalize_domain
+
+        self.assertEqual(_normalize_domain("https://example.test/"), _normalize_domain("https://example.test"))
+
     def test_sign_encrypt_uses_trust_model_always(self) -> None:
         service = self._service()
 
