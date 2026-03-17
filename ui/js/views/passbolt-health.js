@@ -97,12 +97,17 @@ function renderJwtDeepDiagnostics(step) {
       </section>
       <section class="health-subsection">
         <h4>E. Validation réponse serveur</h4>
-        ${kv('dump body.challenge serveur', d.server_challenge_dump_path)}
-        ${kv('verify_token retourné', d.verify_token_returned)}
-        ${kv('verify_token match', d.verify_token_match)}
+        ${kv('response challenge présent', d.response_challenge_present)}
+        ${kv('chemin dump chiffré serveur', d.server_challenge_dump_path)}
+        ${kv('déchiffrement OK', d.response_decryption_ok)}
+        ${kv('stdout brut déchiffrement', d.response_decryption_stdout)}
+        ${kv('JSON déchiffré valide', d.response_json_valid)}
         ${kv('access_token présent', d.access_token_present)}
         ${kv('refresh_token présent', d.refresh_token_present)}
-        ${kv('providers', d.providers)}
+        ${kv('providers présent', d.providers_present)}
+        ${kv('verify_token retourné', d.verify_token_returned)}
+        ${kv('verify_token envoyé', d.verify_token_sent)}
+        ${kv('verify_token match', d.verify_token_match)}
       </section>
       <section class="health-subsection">
         <h4>Comparatif manuel vs applicatif</h4>
