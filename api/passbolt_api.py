@@ -22,6 +22,7 @@ import requests
 APP_CHALLENGE_DUMP_PATH = "/tmp/app-challenge.final.asc"
 APP_CHALLENGE_JSON_DUMP_PATH = "/tmp/app-challenge.json"
 APP_LOGIN_BODY_DUMP_PATH = "/tmp/app-login-body.json"
+APP_LOGIN_RESPONSE_CHALLENGE_DUMP_PATH = "/tmp/app-login-response-challenge.asc"
 
 
 def _utc_now() -> datetime:
@@ -97,6 +98,10 @@ def _safe_secret_diagnostic(value: str) -> dict[str, Any]:
 
 def _sha256_hex(value: str) -> str:
     return hashlib.sha256((value or "").encode("utf-8")).hexdigest()
+
+
+def _normalize_domain(value: Any) -> str:
+    return str(value or "").strip().rstrip("/")
 
 
 @dataclass
@@ -678,6 +683,40 @@ class PassboltApiAuthService:
             raise RuntimeError(f"Déchiffrement échoué: {decrypted.status}")
         return str(decrypted)
 
+    @staticmethod
+    def _extract_response_challenge(login_payload: dict[str, Any]) -> str:
+        body = login_payload.get("body") if isinstance(login_payload, dict) else None
+        if isinstance(body, dict) and isinstance(body.get("challenge"), str):
+            return body.get("challenge") or ""
+        if isinstance(body, str):
+            return body
+        return ""
+
+    def _decrypt_login_response_challenge(self, gpg_home: str, encrypted_challenge: str) -> dict[str, Any]:
+        if not encrypted_challenge:
+            return {"ok": False, "stdout": "", "stderr": "", "returncode": None}
+        command = [
+            self.gpg_path,
+            "--batch",
+            "--yes",
+            "--no-tty",
+            "--pinentry-mode",
+            "loopback",
+            "--homedir",
+            gpg_home,
+        ]
+        if self.passphrase:
+            command.extend(["--passphrase", self.passphrase])
+        command.extend(["--decrypt", APP_LOGIN_RESPONSE_CHALLENGE_DUMP_PATH])
+        proc = subprocess.run(command, capture_output=True, timeout=self.timeout, check=False)
+        return {
+            "ok": proc.returncode == 0,
+            "stdout": (proc.stdout or b"").decode("utf-8", errors="replace"),
+            "stderr": (proc.stderr or b"").decode("utf-8", errors="replace"),
+            "returncode": proc.returncode,
+            "command": command,
+        }
+
     def _extract_token_payload(self, gpg: gnupg.GPG, login_payload: dict[str, Any]) -> dict[str, Any]:
         body = login_payload.get("body") if isinstance(login_payload, dict) else None
         if isinstance(body, str) and "BEGIN PGP MESSAGE" in body:
@@ -690,10 +729,7 @@ class PassboltApiAuthService:
         raise RuntimeError("Réponse login inattendue")
 
     def _verify_mfa_if_required(self, token_payload: dict[str, Any]) -> str:
-        providers = token_payload.get("mfa_providers")
-        if not providers:
-            body = token_payload.get("body") if isinstance(token_payload.get("body"), dict) else {}
-            providers = body.get("mfa_providers")
+        providers = token_payload.get("providers")
         if not providers:
             self._last_mfa_status = "not_required"
             return "not_required"
@@ -763,7 +799,15 @@ class PassboltApiAuthService:
             self._log("error", "JWT login failed", http_status=status, response_body=raw)
             raise RuntimeError(_extract_message(login_payload, raw or f"JWT login failed HTTP {status}"))
 
-        token_payload = self._extract_token_payload(gpg, login_payload)
+        response_challenge = self._extract_response_challenge(login_payload)
+        if not response_challenge:
+            raise RuntimeError("Missing response.body.challenge after JWT login")
+        self._write_text_dump(APP_LOGIN_RESPONSE_CHALLENGE_DUMP_PATH, response_challenge)
+        decrypt_result = self._decrypt_login_response_challenge(context["gpg_home"]["path"], response_challenge)
+        if not decrypt_result.get("ok"):
+            raise RuntimeError(f"Déchiffrement réponse login échoué: {decrypt_result.get('stderr')}")
+        token_payload = json.loads(str(decrypt_result.get("stdout") or ""))
+
         returned_verify_token = token_payload.get("verify_token")
         if returned_verify_token != verify_token:
             raise RuntimeError("verify_token mismatch")
@@ -1080,42 +1124,71 @@ class PassboltApiAuthService:
                     details={**jwt_login_details, "error": _extract_message(login_payload, raw)},
                 )
                 return finalize()
-            token_preview = self._extract_token_payload(gpg, login_payload)
-            server_body = login_payload.get("body") if isinstance(login_payload, dict) else None
-            if isinstance(server_body, str):
-                self._write_text_dump("/tmp/server-login-body.challenge.asc", server_body)
+            response_challenge = self._extract_response_challenge(login_payload)
+            response_challenge_present = bool(response_challenge)
+            if response_challenge_present:
+                self._write_text_dump(APP_LOGIN_RESPONSE_CHALLENGE_DUMP_PATH, response_challenge)
+            decrypt_result = self._decrypt_login_response_challenge(gpg_home_info["path"], response_challenge)
+            decrypted_stdout = str(decrypt_result.get("stdout") or "")
+            decrypted_json_valid = False
+            token_preview: dict[str, Any] = {}
+            json_error = ""
+            if decrypt_result.get("ok"):
+                try:
+                    token_preview = json.loads(decrypted_stdout)
+                    decrypted_json_valid = isinstance(token_preview, dict)
+                except Exception as error:
+                    json_error = str(error)
+
             jwt_login_details.update({
-                "server_challenge_dump_path": "/tmp/server-login-body.challenge.asc" if isinstance(server_body, str) else "",
+                "response_challenge_present": response_challenge_present,
+                "server_challenge_dump_path": APP_LOGIN_RESPONSE_CHALLENGE_DUMP_PATH if response_challenge_present else "",
+                "response_decryption_ok": bool(decrypt_result.get("ok")),
+                "response_decryption_stdout": decrypted_stdout,
+                "response_decryption_stderr": decrypt_result.get("stderr"),
+                "response_json_valid": decrypted_json_valid,
                 "verify_token_returned": token_preview.get("verify_token"),
+                "verify_token_sent": verify_token,
                 "verify_token_match": token_preview.get("verify_token") == verify_token,
-                "access_token_present": bool(token_preview.get("access_token") or token_preview.get("token")),
+                "access_token_present": bool(token_preview.get("access_token")),
                 "refresh_token_present": bool(token_preview.get("refresh_token")),
-                "providers": token_preview.get("mfa_providers") or [],
+                "providers_present": "providers" in token_preview,
+                "providers": token_preview.get("providers") if isinstance(token_preview.get("providers"), list) else [],
+                "domain_returned": token_preview.get("domain"),
+                "domain_sent": challenge_payload.get("domain"),
+                "domain_match": _normalize_domain(token_preview.get("domain")) == _normalize_domain(challenge_payload.get("domain")),
             })
+            if json_error:
+                jwt_login_details["response_json_error"] = json_error
             s.done("success", "JWT login réussi", http_status=status, endpoint="/auth/jwt/login.json", details=jwt_login_details)
 
-            token_payload = token_preview
+            token_payload = token_preview if decrypted_json_valid else {}
 
             s = steps[15]; s.start()
-            server_body = login_payload.get("body") if isinstance(login_payload, dict) else None
-            if isinstance(server_body, str):
-                self._write_text_dump("/tmp/server-login-body.challenge.asc", server_body)
             returned_verify = token_payload.get("verify_token")
-            access_token = token_payload.get("access_token") or token_payload.get("token")
+            access_token = token_payload.get("access_token")
             refresh_token = token_payload.get("refresh_token")
-            providers = token_payload.get("mfa_providers")
-            if not providers and isinstance(token_payload.get("body"), dict):
-                providers = token_payload.get("body", {}).get("mfa_providers")
+            providers = token_payload.get("providers") if isinstance(token_payload.get("providers"), list) else []
             details = {
-                "server_challenge_dump_path": "/tmp/server-login-body.challenge.asc" if isinstance(server_body, str) else "",
-                "response_decrypted": isinstance(server_body, str),
+                "response_challenge_present": response_challenge_present,
+                "server_challenge_dump_path": APP_LOGIN_RESPONSE_CHALLENGE_DUMP_PATH if response_challenge_present else "",
+                "response_decryption_ok": bool(decrypt_result.get("ok")),
+                "response_decryption_stdout": decrypted_stdout,
+                "response_json_valid": decrypted_json_valid,
                 "verify_token_sent": verify_token,
                 "verify_token_returned": returned_verify,
                 "verify_token_match": returned_verify == verify_token,
                 "access_token_present": bool(access_token),
                 "refresh_token_present": bool(refresh_token),
-                "providers": providers or [],
+                "providers_present": "providers" in token_payload,
+                "providers": providers,
+                "domain_sent": challenge_payload.get("domain"),
+                "domain_returned": token_payload.get("domain"),
+                "domain_match": _normalize_domain(token_payload.get("domain")) == _normalize_domain(challenge_payload.get("domain")),
             }
+            if not response_challenge_present or not decrypt_result.get("ok") or not decrypted_json_valid:
+                s.done("error", "Login JWT réussi mais déchiffrement/validation de la réponse échoue", details=details)
+                return finalize()
             if returned_verify != verify_token:
                 s.done("error", "verify_token mismatch", details=details)
                 return finalize()
@@ -1123,13 +1196,10 @@ class PassboltApiAuthService:
                 s.done("error", "Access token absent", details=details)
                 return finalize()
             self._session.headers.update({"Authorization": f"Bearer {access_token}"})
-            s.done("success", "verify_token validé", details=details)
+            s.done("success", "Login JWT réussi et réponse serveur validée", details=details)
 
             s = steps[16]; s.start()
-            providers = token_payload.get("mfa_providers")
-            if not providers:
-                body = token_payload.get("body") if isinstance(token_payload.get("body"), dict) else {}
-                providers = body.get("mfa_providers")
+            providers = token_payload.get("providers")
             if providers:
                 s.done("success", "MFA requise", details={"providers": providers})
             else:
