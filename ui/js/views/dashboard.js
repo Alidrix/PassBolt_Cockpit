@@ -19,7 +19,7 @@ function normalizeStatus(kind) {
 
 function renderHealthCard(item) {
   const status = normalizeStatus(item?.status || 'unknown');
-  return `<article class="health-card"><h3 class="text-ellipsis">${escapeHtml(item?.label || '-')}</h3><div>${statusChip(status.chip, status.label)}</div></article>`;
+  return `<article class="health-card"><h3 class="text-ellipsis-wrap">${escapeHtml(item?.label || '-')}</h3><div>${statusChip(status.chip, status.label)}</div></article>`;
 }
 
 function shortRawMessage(raw) {
