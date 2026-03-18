@@ -13,7 +13,7 @@ export function statusChip(kind = 'unknown', text = 'Inconnu', detail = '') {
     danger: 'status-danger',
     info: 'status-info'
   };
-  return `<span class="status-chip ${classes[kind] || classes.unknown}"><span class="dot"></span><span class="text-ellipsis">${escapeHtml(text)}</span>${detail ? `<span class="text-ellipsis">${escapeHtml(detail)}</span>` : ''}</span>`;
+  return `<span class="status-chip ${classes[kind] || classes.unknown}"><span class="dot"></span><span class="text-ellipsis-wrap">${escapeHtml(text)}</span>${detail ? `<span class="text-ellipsis-wrap">${escapeHtml(detail)}</span>` : ''}</span>`;
 }
 
 export function statusBadge(status) {

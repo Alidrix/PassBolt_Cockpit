@@ -1,15 +1,22 @@
-.grid-health { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: var(--space-3); }
+.grid-health { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: var(--space-2); }
 .health-card {
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   padding: var(--space-3);
   background: color-mix(in oklab, var(--surface-2), transparent 10%);
   display: grid;
-  gap: var(--space-2);
-  min-height: 112px;
+  gap: var(--space-1);
+  min-height: 88px;
 }
 
-.dashboard-inline-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: var(--space-2); margin-top: var(--space-3); }
+.health-card h3 {
+  font-size: var(--text-sm);
+  line-height: 1.25;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.dashboard-inline-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(108px, 1fr)); gap: var(--space-2); margin-top: var(--space-2); }
 .dashboard-inline-kpis div { border: 1px solid var(--border); border-radius: var(--radius-sm); background: color-mix(in oklab, var(--surface-2), transparent 8%); padding: var(--space-2); display: grid; gap: 2px; }
 .dashboard-activity-item { padding: var(--space-2) 0; border-bottom: 1px dashed color-mix(in oklab, var(--border), transparent 20%); }
 .dashboard-alert-line { border-radius: var(--radius-sm); padding: .55rem .65rem; border: 1px solid color-mix(in oklab, var(--warning), transparent 58%); background: color-mix(in oklab, var(--warning), transparent 92%); }
@@ -46,7 +53,8 @@
 .batch-item { border: 1px solid var(--border); border-radius: var(--radius-sm); background: color-mix(in oklab, var(--surface-2), transparent 8%); padding: var(--space-3); text-align: left; cursor: pointer; }
 .batch-item.active { border-color: color-mix(in oklab, var(--info), transparent 45%); box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--info), transparent 35%); }
 
-.tabs { display: flex; gap: var(--space-2); flex-wrap: wrap; margin-bottom: var(--space-3); }
+.tabs { display: flex; gap: var(--space-2); flex-wrap: wrap; margin-bottom: var(--space-2); }
+.tabs .tab-btn { font-size: var(--text-sm); padding: 0.42rem 0.72rem; }
 .tab-btn.active { background: color-mix(in oklab, var(--info), transparent 86%); border-color: color-mix(in oklab, var(--info), transparent 50%); }
 .tab-panel { display: none; }
 .tab-panel.active { display: block; }
@@ -54,23 +62,58 @@
 .logs-stream-box.is-error { border-color: color-mix(in oklab, var(--danger), transparent 50%); }
 .audit-line { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: var(--space-3); border-bottom: 1px dashed var(--border); padding: var(--space-2) 0; }
 
-.health-summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: var(--space-2); }
+.health-overview-shell {
+  border: 1px solid color-mix(in oklab, var(--info), transparent 70%);
+  border-radius: var(--radius-md);
+  background: linear-gradient(165deg, color-mix(in oklab, var(--surface-2), transparent 3%), color-mix(in oklab, var(--surface-1), transparent 1%));
+  padding: var(--space-3);
+  display: grid;
+  gap: var(--space-3);
+}
+.health-overview-shell h3 {
+  font-size: var(--text-sm);
+  letter-spacing: .03em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+.health-summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(142px, 1fr)); gap: var(--space-2); }
 .health-summary-cell {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: color-mix(in oklab, var(--surface-2), transparent 10%);
-  padding: var(--space-2);
+  padding: var(--space-2) var(--space-2) var(--space-1);
   display: grid;
-  gap: var(--space-1);
+  gap: 0.26rem;
+  min-height: 72px;
 }
-.health-step { border: 1px solid var(--border); border-left: 4px solid var(--border-strong); border-radius: var(--radius-sm); padding: var(--space-3); margin-bottom: var(--space-2); background: color-mix(in oklab, var(--surface-2), transparent 10%); }
+.health-summary-cell .muted { font-size: var(--text-xs); line-height: 1.2; }
+
+.health-details-shell {
+  border: 1px solid color-mix(in oklab, var(--border-strong), transparent 55%);
+  border-radius: var(--radius-md);
+  background: color-mix(in oklab, var(--surface-1), transparent 2%);
+  padding: var(--space-3);
+  display: grid;
+  gap: var(--space-2);
+}
+.health-details-shell h3 {
+  font-size: var(--text-sm);
+  letter-spacing: .03em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+
+.health-step { border: 1px solid var(--border); border-left: 3px solid var(--border-strong); border-radius: var(--radius-sm); padding: var(--space-2); margin-bottom: var(--space-2); background: color-mix(in oklab, var(--surface-2), transparent 10%); }
 .health-step-success { border-left-color: var(--success); }
 .health-step-warning { border-left-color: var(--warning); }
 .health-step-error { border-left-color: var(--danger); }
 .health-step-skipped { border-left-color: var(--neutral); }
 .health-step-head { display: flex; justify-content: space-between; align-items: center; gap: var(--space-2); }
-.health-deep-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: var(--space-2); }
-.health-subsection { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: var(--space-2); background: var(--surface-1); }
+.health-step-head strong { min-width: 0; overflow-wrap: anywhere; font-size: var(--text-sm); line-height: 1.2; }
+.health-step p { font-size: var(--text-sm); }
+.health-deep-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: var(--space-2); }
+.health-subsection { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: var(--space-2); background: var(--surface-1); min-width: 0; }
+.health-subsection h4 { font-size: var(--text-sm); line-height: 1.2; margin-bottom: var(--space-1); }
 .health-kv { display: grid; grid-template-columns: 1fr 1.1fr; gap: .45rem; padding: .2rem 0; border-bottom: 1px dashed color-mix(in oklab, var(--border), transparent 36%); }
 .health-kv:last-child { border-bottom: 0; }
 .health-kv span { font-size: var(--text-xs); color: var(--text-3); }
