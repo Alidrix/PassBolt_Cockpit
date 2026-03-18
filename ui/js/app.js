@@ -54,15 +54,18 @@ function renderLayout() {
 function init() {
   renderLayout();
   initThemeToggle();
+
   document.querySelectorAll('.menu-item').forEach((item) => item.addEventListener('click', (e) => {
     e.preventDefault();
     switchView(item.dataset.view);
   }));
-  $('globalRefresh')?.addEventListener('click', () => {
-    refreshActiveView().catch((e) => setToast(e.message));
-  });
-  Promise.all([refreshDashboard(), refreshDeleteConfig(), refreshHistory(), refreshLogs(), refreshPassboltHealth()]).catch((e) => setToast(e.message));
-}
 
+  $('globalRefresh')?.addEventListener('click', () => {
+    refreshActiveView().then(() => setToast('Vue actualisée.', 'info')).catch((e) => setToast(e.message, 'error'));
+  });
+
+  Promise.all([refreshDashboard(), refreshDeleteConfig(), refreshHistory(), refreshLogs(), refreshPassboltHealth()])
+    .catch((e) => setToast(e.message, 'error'));
+}
 
 init();
