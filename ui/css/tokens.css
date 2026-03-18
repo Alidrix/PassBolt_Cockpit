@@ -26,8 +26,8 @@
   --shadow-soft: 0 12px 28px rgba(2, 8, 20, 0.26);
   --shadow-strong: 0 26px 54px rgba(2, 8, 20, 0.48);
 
-  --sidebar-width: clamp(224px, 20vw, 286px);
-  --topbar-height: clamp(54px, 6vh, 64px);
+  --sidebar-width: clamp(208px, 19vw, 272px);
+  --topbar-height: clamp(48px, 5.4vh, 58px);
 
   --z-topbar: 40;
   --z-sidebar: 50;
@@ -66,17 +66,17 @@
   --radius-lg: 28px;
   --radius-pill: 999px;
 
-  --space-1: clamp(0.25rem, 0.2rem + 0.25vw, 0.45rem);
-  --space-2: clamp(0.5rem, 0.35rem + 0.3vw, 0.7rem);
-  --space-3: clamp(0.75rem, 0.6rem + 0.35vw, 1rem);
-  --space-4: clamp(1rem, 0.85rem + 0.5vw, 1.25rem);
-  --space-5: clamp(1.25rem, 1rem + 0.8vw, 1.7rem);
-  --space-6: clamp(1.5rem, 1.2rem + 1vw, 2rem);
-  --space-7: clamp(2rem, 1.6rem + 1.2vw, 2.6rem);
+  --space-1: clamp(0.22rem, 0.18rem + 0.2vw, 0.4rem);
+  --space-2: clamp(0.44rem, 0.32rem + 0.26vw, 0.62rem);
+  --space-3: clamp(0.65rem, 0.52rem + 0.3vw, 0.9rem);
+  --space-4: clamp(0.88rem, 0.74rem + 0.42vw, 1.12rem);
+  --space-5: clamp(1.06rem, 0.9rem + 0.62vw, 1.42rem);
+  --space-6: clamp(1.26rem, 1.05rem + 0.82vw, 1.72rem);
+  --space-7: clamp(1.72rem, 1.4rem + 1vw, 2.24rem);
 
-  --text-xs: clamp(0.72rem, 0.7rem + 0.15vw, 0.8rem);
-  --text-sm: clamp(0.84rem, 0.8rem + 0.2vw, 0.94rem);
-  --text-md: clamp(0.94rem, 0.9rem + 0.28vw, 1.05rem);
-  --text-lg: clamp(1.1rem, 1.05rem + 0.45vw, 1.35rem);
-  --text-xl: clamp(1.35rem, 1.2rem + 0.7vw, 1.75rem);
+  --text-xs: clamp(0.66rem, 0.64rem + 0.13vw, 0.74rem);
+  --text-sm: clamp(0.76rem, 0.72rem + 0.18vw, 0.86rem);
+  --text-md: clamp(0.85rem, 0.82rem + 0.24vw, 0.95rem);
+  --text-lg: clamp(1rem, 0.95rem + 0.36vw, 1.2rem);
+  --text-xl: clamp(1.2rem, 1.1rem + 0.58vw, 1.56rem);
 }

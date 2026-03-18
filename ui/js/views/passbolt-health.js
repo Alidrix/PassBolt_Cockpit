@@ -9,12 +9,6 @@ const STEP_COLORS = {
   skipped: 'neutral'
 };
 
-const GLOBAL_COLORS = {
-  ok: { chip: 'operational', label: 'Opérationnel' },
-  warning: { chip: 'degraded', label: 'Partiel' },
-  error: { chip: 'error', label: 'Validation échouée' }
-};
-
 function kv(label, value) {
   const safe = value === undefined || value === null || value === '' ? '<span class="muted">-</span>' : escapeHtml(typeof value === 'string' ? value : JSON.stringify(value));
   return `<div class="health-kv"><span>${escapeHtml(label)}</span><strong>${safe}</strong></div>`;
@@ -80,65 +74,75 @@ function renderSummary(report) {
   const map = Object.fromEntries((report.steps || []).map((step) => [step.id, step.status]));
   const cell = (label, key) => `<article class="health-summary-cell"><span class="muted">${escapeHtml(label)}</span>${statusChip(STEP_COLORS[map[key]] || 'neutral', map[key] || 'non testé')}</article>`;
   return `
-    <div class="health-summary-grid">
-      ${cell('Connectivité', 'network')}
-      ${cell('TLS', 'tls')}
-      ${cell('Binaire GPG', 'gpg_binary')}
-      ${cell('GPG homedir', 'gpg_home')}
-      ${cell('Auth verify', 'verify')}
-      ${cell('Auth JWT', 'jwt_login')}
-      ${cell('verify_token', 'verify_token')}
-      ${cell('MFA requise', 'mfa')}
-      ${cell('MFA TOTP', 'mfa_totp')}
-      ${cell('Groupes API', 'groups')}
-      ${cell('Healthcheck détaillés', 'healthcheck')}
-    </div>
-  `;
-}
-
-export function renderPassboltHealthView() {
-  $('passboltHealthView').innerHTML = `
-    <div class="card">
-      <div class="section-header">
-        <h3>Diagnostic</h3>
-        <button id="runPassboltDiagnostic" class="btn btn-primary">Lancer le diagnostic</button>
+    <section class="health-overview-shell">
+      <h3>Contrôles API</h3>
+      <div class="health-summary-grid">
+        ${cell('Connectivité', 'network')}
+        ${cell('TLS', 'tls')}
+        ${cell('Binaire GPG', 'gpg_binary')}
+        ${cell('GPG homedir', 'gpg_home')}
+        ${cell('Auth verify', 'verify')}
+        ${cell('Auth JWT', 'jwt_login')}
+        ${cell('verify_token', 'verify_token')}
+        ${cell('MFA requise', 'mfa')}
+        ${cell('MFA TOTP', 'mfa_totp')}
+        ${cell('Groupes API', 'groups')}
+        ${cell('Healthcheck détaillés', 'healthcheck')}
       </div>
-      <div id="passboltHealthGlobal" class="mt-2"></div>
-      <div id="passboltHealthSummary" class="mt-3"></div>
-      <div id="passboltHealthSteps" class="mt-3"></div>
-    </div>
+    </section>
   `;
-  $('runPassboltDiagnostic')?.addEventListener('click', () => refreshPassboltHealth());
 }
 
-export async function refreshPassboltHealth() {
-  const previousGlobal = $('passboltHealthGlobal')?.innerHTML || '';
-  const previousSummary = $('passboltHealthSummary')?.innerHTML || '';
-  const previousSteps = $('passboltHealthSteps')?.innerHTML || '';
-  try {
-    const report = await apiGet('/api/passbolt/health');
-    const global = GLOBAL_COLORS[report.overall_status] || { chip: 'unknown', label: 'Non détecté' };
-    $('passboltHealthGlobal').innerHTML = `<div class="card"><div class="section-header"><h3>Statut global</h3>${statusChip(global.chip, global.label)}</div></div>`;
-    $('passboltHealthSummary').innerHTML = renderSummary(report);
-    const steps = report.steps || [];
-    $('passboltHealthSteps').innerHTML = steps.length ? steps.map(renderStep).join('') : '<div class="soft-empty">Aucune étape retournée par le backend.</div>';
+function renderDetails(steps) {
+  return `
+    <section class="health-details-shell">
+      <h3>Résultats détaillés</h3>
+      <div>
+        ${steps.length ? steps.map(renderStep).join('') : '<div class="soft-empty">Aucune étape retournée par le backend.</div>'}
+      </div>
+    </section>
+  `;
+}
 
-  } catch (error) {
-    if (!$('passboltHealthGlobal')?.innerHTML && previousGlobal) $('passboltHealthGlobal').innerHTML = previousGlobal;
-    if (!$('passboltHealthSummary')?.innerHTML && previousSummary) $('passboltHealthSummary').innerHTML = previousSummary;
-    if (!$('passboltHealthSteps')?.innerHTML && previousSteps) $('passboltHealthSteps').innerHTML = previousSteps;
-    const safeMessage = escapeHtml(error?.message || String(error));
-    const errorBlock = `
+function errorBlockContent(message) {
+  return `
+    <section class="health-details-shell">
+      <h3>Résultats détaillés</h3>
       <div class="health-step health-step-error">
         <div class="health-step-head">
           <strong>Erreur Python / backend</strong>
           ${statusChip('error', 'error')}
         </div>
         <p>Le diagnostic a rencontré une exception.</p>
-        <pre class="json-block">${safeMessage}</pre>
+        <pre class="json-block">${message}</pre>
       </div>
-    `;
-    $('passboltHealthSteps').innerHTML = `${errorBlock}${$('passboltHealthSteps')?.innerHTML || ''}`;
+    </section>
+  `;
+}
+
+export function renderPassboltHealthView() {
+  $('passboltHealthView').innerHTML = `
+    <div class="card">
+      <div id="passboltHealthSummary"></div>
+      <div id="passboltHealthSteps" class="mt-3"></div>
+    </div>
+  `;
+}
+
+export async function refreshPassboltHealth() {
+  const previousSummary = $('passboltHealthSummary')?.innerHTML || '';
+  const previousSteps = $('passboltHealthSteps')?.innerHTML || '';
+  try {
+    const report = await apiGet('/api/passbolt/health');
+    $('passboltHealthSummary').innerHTML = renderSummary(report);
+    const steps = report.steps || [];
+    $('passboltHealthSteps').innerHTML = renderDetails(steps);
+
+  } catch (error) {
+    if (!$('passboltHealthSummary')?.innerHTML && previousSummary) $('passboltHealthSummary').innerHTML = previousSummary;
+    if (!$('passboltHealthSteps')?.innerHTML && previousSteps) $('passboltHealthSteps').innerHTML = previousSteps;
+    const safeMessage = escapeHtml(error?.message || String(error));
+    $('passboltHealthSteps').innerHTML = errorBlockContent(safeMessage);
     setToast(`Diagnostic Passbolt indisponible: ${error.message}`, 'error');
   }
 }
