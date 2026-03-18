@@ -1,6 +1,7 @@
 import { apiGet } from '../api.js';
 import { $, escapeHtml, setToast } from '../utils.js';
 import { statusChip } from '../components/status-chip.js';
+import { pageHeader } from '../components/page-header.js';
 
 const STEP_COLORS = {
   success: 'operational',
@@ -172,6 +173,7 @@ function renderSummary(report) {
 
 export function renderPassboltHealthView() {
   $('passboltHealthView').innerHTML = `
+    ${pageHeader('Passbolt health monitoring', 'Diagnostic complet de connectivité, auth JWT, MFA et groupes API.') }
     <div class="card">
       <div class="section-header">
         <h3>Santé API Passbolt</h3>
@@ -214,6 +216,6 @@ export async function refreshPassboltHealth() {
       </div>
     `;
     $('passboltHealthSteps').innerHTML = `${errorBlock}${$('passboltHealthSteps')?.innerHTML || ''}`;
-    setToast(`Diagnostic Passbolt indisponible: ${error.message}`);
+    setToast(`Diagnostic Passbolt indisponible: ${error.message}`, 'error');
   }
 }

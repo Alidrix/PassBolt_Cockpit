@@ -9,9 +9,27 @@ export function textCell(value, cls = 'text-break') {
   return `<span class="${cls}">${escapeHtml(value || '-')}</span>`;
 }
 
-export function setToast(msg) {
-  const el = $('toast');
-  el.textContent = msg;
-  el.style.display = 'block';
-  setTimeout(() => { el.style.display = 'none'; }, 2800);
+function inferLevel(msg = '') {
+  const text = String(msg).toLowerCase();
+  if (/(erreur|error|échec|failed|indisponible|danger|refus)/.test(text)) return 'error';
+  if (/(attention|warning|simulation|dry-run|bloqu|incomplet)/.test(text)) return 'warning';
+  if (/(terminé|validé|succès|success|opérationnel)/.test(text)) return 'success';
+  return 'info';
+}
+
+export function setToast(msg, level) {
+  const center = $('notificationCenter');
+  if (!center) return;
+  const tone = level || inferLevel(msg);
+  const item = document.createElement('article');
+  item.className = `system-message ${tone}`;
+  item.innerHTML = `<strong>${escapeHtml(msg)}</strong><small>${formatDate(new Date().toISOString())}</small>`;
+  center.prepend(item);
+
+  while (center.children.length > 6) center.removeChild(center.lastElementChild);
+
+  setTimeout(() => {
+    item.classList.add('fade-out');
+    setTimeout(() => item.remove(), 180);
+  }, 5200);
 }
