@@ -3,6 +3,7 @@ import { state } from '../state.js';
 import { $, escapeHtml, formatDate, setToast } from '../utils.js';
 import { emptyState } from '../components/empty-state.js';
 import { statusBadge, statusChip } from '../components/status-chip.js';
+import { pageHeader } from '../components/page-header.js';
 
 function normalizeStatus(kind) {
   const map = {
@@ -19,7 +20,7 @@ function normalizeStatus(kind) {
 
 function renderHealthCard(item) {
   const status = normalizeStatus(item?.status || 'unknown');
-  return `<div class="health-card"><h3 class="text-ellipsis">${escapeHtml(item?.label || '-')}</h3><div>${statusChip(status.chip, status.label)}</div><p class="muted text-ellipsis">${escapeHtml(item?.detail || '-')}</p></div>`;
+  return `<article class="health-card"><h3 class="text-ellipsis">${escapeHtml(item?.label || '-')}</h3><div>${statusChip(status.chip, status.label)}</div><p class="muted text-break">${escapeHtml(item?.detail || '-')}</p></article>`;
 }
 
 function shortRawMessage(raw) {
@@ -39,11 +40,9 @@ async function fetchProbe(endpoint) {
     const res = await fetch(endpoint);
     const raw = await res.text();
     const payload = parseJsonSafely(raw);
-    console.info('[Dashboard][probe]', { endpoint, status: res.status, raw_response: raw });
     return { endpoint, status: res.status, raw, payload, checkedAt };
   } catch (error) {
     const raw = String(error?.message || error || 'unknown error');
-    console.info('[Dashboard][probe][error]', { endpoint, status: 0, raw_response: raw });
     return { endpoint, status: 0, raw, payload: {}, checkedAt };
   }
 }
@@ -56,12 +55,7 @@ function wasRecentImportSuccessful(latest) {
 function deriveApiImportStatus(probe, latestBatch) {
   const payload = probe?.payload || {};
   const statusCode = Number(probe?.status || 0);
-  const healthy = statusCode === 200 && (
-    payload?.ok === true
-    || payload?.status === 'ok'
-    || typeof payload?.docker === 'object'
-    || Boolean(payload?.diagnostics)
-  );
+  const healthy = statusCode === 200 && (payload?.ok === true || payload?.status === 'ok' || typeof payload?.docker === 'object' || Boolean(payload?.diagnostics));
   const recentImportOk = wasRecentImportSuccessful(latestBatch);
   const checkedAtLabel = probe?.checkedAt ? formatDate(probe.checkedAt) : '-';
   const baseDetail = `Endpoint: ${probe?.endpoint || '-'} | HTTP: ${statusCode || 'N/A'} | Vérif: ${checkedAtLabel} | Brut: ${shortRawMessage(probe?.raw)}`;
@@ -86,33 +80,20 @@ function deriveApiHealthStatus(deleteCfg) {
 
 export function renderDashboardView() {
   $('dashboardView').innerHTML = `
+    ${pageHeader('Cockpit supervision', 'Vue opérationnelle instantanée de l’import, des suppressions et de la santé plateforme.')}
     <div class="grid-health" id="healthGrid"></div>
-
-    <div class="grid-main compact-main">
-      <div class="card">
-        <div class="section-header"><h3>Dernier import</h3></div>
-        <div id="lastImportBlock"></div>
-      </div>
-      <div class="card">
-        <div class="section-header"><h3>Alertes</h3></div>
-        <div id="alertsBlock"></div>
-      </div>
+    <div class="grid-main">
+      <div class="card"><div class="section-header"><h3>Dernier import</h3></div><div id="lastImportBlock"></div></div>
+      <div class="card"><div class="section-header"><h3>Alertes prioritaires</h3></div><div id="alertsBlock"></div></div>
     </div>
-
-    <div class="grid-main compact-main">
-      <div class="card">
-        <div class="section-header"><h3>Activité</h3></div>
-        <div id="activityBlock"></div>
-      </div>
-    </div>
+    <div class="card"><div class="section-header"><h3>Activité récente</h3></div><div id="activityBlock"></div></div>
   `;
 }
 
 export async function refreshDashboard() {
   try {
-    const importHealthEndpoint = '/api/health';
     const [healthProbe, deleteCfg, dbSummary, batches, logsSummary] = await Promise.all([
-      fetchProbe(importHealthEndpoint),
+      fetchProbe('/api/health'),
       apiGet('/api/delete-config-status').catch(() => ({})),
       apiGet('/api/db/summary').catch(() => ({})),
       apiGet('/api/batches').catch(() => ({ items: [] })),
@@ -126,47 +107,54 @@ export async function refreshDashboard() {
     const cliStatus = deriveCliStatus(health);
     const apiHealth = deriveApiHealthStatus(deleteCfg);
 
-    const jwtRejected = deleteCfg?.jwt_login_status === 'error';
-    const deleteApiDetail = jwtRejected
+    const deleteApiDetail = deleteCfg?.jwt_login_status === 'error'
       ? (deleteCfg?.message || 'Crypto locale OK / Login JWT rejeté par Passbolt')
       : (deleteCfg?.groups_status ? `Groupes: ${deleteCfg.groups_status}` : (deleteCfg?.message || 'Diagnostic requis'));
 
-    const healthCards = [
+    $('healthGrid').innerHTML = [
       { label: 'API Import', ...apiImport },
       { label: 'Création utilisateur via CLI', ...cliStatus },
       { label: 'Groupes / Suppression API', status: apiHealth.status, detail: deleteApiDetail },
       { label: 'Base locale', status: 'configured', detail: `${dbSummary?.batches_count || 0} batch` },
       { label: 'Santé API globale', ...apiHealth }
-    ];
-    $('healthGrid').innerHTML = healthCards.map((item) => renderHealthCard(item)).join('');
+    ].map(renderHealthCard).join('');
 
     $('lastImportBlock').innerHTML = latest ? `
-      <p class="dashboard-title text-ellipsis"><strong>${escapeHtml(latest.filename || '-')}</strong></p>
+      <p class="text-ellipsis"><strong>${escapeHtml(latest.filename || '-')}</strong></p>
       <p class="muted text-ellipsis">${formatDate(latest.created_at)}</p>
-      <p>${statusBadge(latest.status)}</p>
-      <p class="muted text-ellipsis">${escapeHtml(latest.batch_uuid || '-')}</p>
+      <p class="mt-2">${statusBadge(latest.status)}</p>
+      <p class="muted text-ellipsis mt-2">${escapeHtml(latest.batch_uuid || '-')}</p>
       <div class="dashboard-inline-kpis">
         <div><span class="muted">Créés</span><strong>${escapeHtml(latest.success_count || 0)}</strong></div>
         <div><span class="muted">Groupes</span><strong>${escapeHtml(latest.group_assignments || 0)}</strong></div>
         <div><span class="muted">Erreurs</span><strong>${escapeHtml(latest.error_count || 0)}</strong></div>
         <div><span class="muted">Supprimables</span><strong>${escapeHtml(latest.deletable_candidates || dbSummary?.deletable_candidates_count || 0)}</strong></div>
       </div>
-      <div class="action-bar mt-3">
-        <button class="btn btn-secondary" data-target-view="historyView">Détails</button>
-      </div>
+      <div class="action-bar mt-3"><button class="btn btn-secondary" data-target-view="historyView">Détails</button></div>
     ` : emptyState('Aucun import.');
+
     const importUnavailable = normalizeStatus(apiImport?.status || 'unknown').chip === 'unknown';
-    const alerts = [logsSummary?.by_level?.error ? `${logsSummary.by_level.error} critique` : '', !deleteCfg?.configured ? 'Delete API non configurée' : '', importUnavailable ? 'API Import indisponible' : ''].filter(Boolean);
-    $('alertsBlock').innerHTML = alerts.length ? `${alerts.map((a) => `<p class="line-clamp-2 text-break dashboard-alert-line">${escapeHtml(a)}</p>`).join('')}<div class="mt-3"><button class="btn btn-secondary" data-target-view="logsAuditView">Voir logs</button></div>` : emptyState('Aucune alerte.');
-    $('activityBlock').innerHTML = state.batches.slice(0, 5).map((b) => `<div class="dashboard-activity-item"><p class="text-ellipsis"><strong>${escapeHtml(b.filename || 'Sans nom')}</strong></p><p class="muted text-ellipsis">${formatDate(b.created_at)}</p></div>`).join('') || emptyState('Aucune activité.');
+    const alerts = [
+      logsSummary?.by_level?.error ? `${logsSummary.by_level.error} critique` : '',
+      !deleteCfg?.configured ? 'Delete API non configurée' : '',
+      importUnavailable ? 'API Import indisponible' : ''
+    ].filter(Boolean);
+
+    $('alertsBlock').innerHTML = alerts.length
+      ? `${alerts.map((a) => `<p class="dashboard-alert-line">${escapeHtml(a)}</p>`).join('')}<div class="mt-3"><button class="btn btn-secondary" data-target-view="logsAuditView">Voir logs</button></div>`
+      : emptyState('Aucune alerte.');
+
+    $('activityBlock').innerHTML = state.batches.slice(0, 6).map((b) => `
+      <div class="dashboard-activity-item">
+        <p class="text-ellipsis"><strong>${escapeHtml(b.filename || 'Sans nom')}</strong></p>
+        <p class="muted text-ellipsis">${formatDate(b.created_at)}</p>
+      </div>
+    `).join('') || emptyState('Aucune activité.');
+
     document.querySelectorAll('[data-target-view]').forEach((button) => {
       if (button.dataset.navBound) return;
       button.dataset.navBound = 'true';
-      button.addEventListener('click', () => {
-        const view = button.dataset.targetView;
-        const nav = document.querySelector(`.menu-item[data-view="${view}"]`);
-        nav?.click();
-      });
+      button.addEventListener('click', () => document.querySelector(`.menu-item[data-view="${button.dataset.targetView}"]`)?.click());
     });
-  } catch (e) { setToast(`Dashboard indisponible: ${e.message}`); }
+  } catch (e) { setToast(`Dashboard indisponible: ${e.message}`, 'error'); }
 }

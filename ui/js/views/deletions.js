@@ -3,6 +3,7 @@ import { state } from '../state.js';
 import { $, escapeHtml, setToast, textCell } from '../utils.js';
 import { emptyState } from '../components/empty-state.js';
 import { statusChip } from '../components/status-chip.js';
+import { pageHeader } from '../components/page-header.js';
 
 let deleteApiConfigured = false;
 let deleteApiMessage = '';
@@ -28,50 +29,44 @@ const STATUS_META = {
 
 export function renderDeletionsView() {
   $('deletionsView').innerHTML = `
-    <div id="deleteModeBanner" class="deletion-banner simulation">MODE SIMULATION — aucune suppression réelle n'a été envoyée au serveur.</div>
+    ${pageHeader('Deletion control room', 'Analysez un batch, validez les protections puis exécutez uniquement quand toutes les conditions sont réunies.', '<span id="deleteModeBadge" class="mode-badge">-</span>')}
+
     <div class="deletion-status-grid">
       <div class="status-mini-card"><span class="label">API Suppression</span><div id="deleteApiMini">${statusChip('check', 'Vérification...')}</div></div>
       <div class="status-mini-card"><span class="label">Batch sélectionné</span><strong id="deleteBatchMini">Dernier import</strong></div>
-      <div class="status-mini-card"><span class="label">Dry-run</span><strong id="deleteDryRunMini">Activé</strong></div>
+      <div class="status-mini-card"><span class="label">Mode</span><strong id="deleteDryRunMini">Activé</strong></div>
       <div class="status-mini-card"><span class="label">Prévisualisation</span><strong id="deletePreviewMini">Aucune analyse</strong></div>
     </div>
 
-    <div class="card">
-      <div class="section-header"><h3>Cible de suppression</h3><p>La suppression est limitée au batch choisi et protège toujours les comptes admin.</p></div>
+    <section class="card">
+      <div class="section-header"><h3>1 · Ciblage</h3><p>La suppression reste limitée au batch choisi, avec protection admin conservée.</p></div>
       <div class="deletion-target-grid">
-        <div>
-          <label>Batch à analyser</label>
-          <select id="deleteBatchSelect"></select>
-        </div>
-        <div>
-          <label>Mode dry-run</label>
-          <label id="deleteDryRunToggle" class="toggle-control"><input id="deleteDryRunOnly" type="checkbox" checked/><span class="toggle-slider"></span><span class="toggle-text">Activé</span></label>
-        </div>
+        <div><label>Batch à analyser</label><select id="deleteBatchSelect"></select></div>
+        <div><label>Mode dry-run</label><label id="deleteDryRunToggle" class="toggle-control"><input id="deleteDryRunOnly" type="checkbox" checked/><span class="toggle-slider"></span><span class="toggle-text">Activé</span></label></div>
         <div class="action-bar align-end"><button id="deletePreviewBtn" class="btn btn-secondary">Analyser</button></div>
       </div>
       <div id="deleteTargetSummary" class="deletion-target-summary"></div>
-    </div>
+    </section>
 
-    <div class="card">
-      <div class="section-header"><h3>Résultat d'analyse</h3></div>
+    <section class="card">
+      <div class="section-header"><h3>2 · Analyse / prévisualisation</h3></div>
       <div id="deleteAnalysisWrap" class="table-wrap"></div>
-    </div>
+    </section>
 
-    <div class="card">
-      <div class="section-header"><h3>Synthèse avant action</h3></div>
+    <section class="card">
+      <div class="section-header"><h3>3 · Synthèse</h3></div>
       <div id="deleteSynthesis" class="deletion-synthesis-grid"></div>
-      <div id="deleteOutcomeBanner" class="deletion-banner info">Aucune exécution réalisée.</div>
-    </div>
+    </section>
 
-    <div class="card controlled-action-card">
-      <div class="section-header"><h3>Exécution contrôlée</h3><p>Action sensible : exécution réelle uniquement après dry-run valide.</p></div>
+    <section class="card controlled-action-card">
+      <div class="section-header"><h3>4 · Exécution contrôlée</h3><p>Suppression réelle uniquement après analyse et confirmation explicite.</p></div>
       <label class="confirm-control"><input id="deleteConfirm" type="checkbox"/> Je confirme vouloir lancer la suppression réelle des comptes éligibles.</label>
       <div class="action-bar mt-3"><button id="deleteExecuteBtn" class="btn btn-danger" disabled>Lancer la suppression réelle</button></div>
-      <p class="muted mt-3">Sécurité : les admins et les exclusions sont automatiquement ignorés côté backend.</p>
-    </div>
+      <p class="muted mt-3">Sécurité backend inchangée : admins et exclusions restent ignorés.</p>
+    </section>
 
     <details class="card technical-logs" open>
-      <summary>Journal / détails techniques</summary>
+      <summary>5 · Journal technique</summary>
       <pre id="deleteTechLogs" class="console mt-3"></pre>
     </details>
   `;
@@ -90,21 +85,14 @@ function updateDryRunToggle() {
   $('deleteDryRunToggle')?.classList.toggle('off', !checked);
   const text = $('deleteDryRunToggle')?.querySelector('.toggle-text');
   if (text) text.textContent = checked ? 'Activé' : 'Désactivé';
-  $('deleteDryRunMini').textContent = checked ? 'Activé' : 'Désactivé';
-  const modeBanner = $('deleteModeBanner');
-  if (modeBanner) {
-    modeBanner.className = `deletion-banner ${checked ? 'simulation' : 'real'}`;
-    modeBanner.textContent = checked
-      ? "MODE SIMULATION — aucune suppression réelle n'a été envoyée au serveur."
-      : 'MODE SUPPRESSION RÉELLE — la suppression sera envoyée à Passbolt après confirmation.';
-  }
+  $('deleteDryRunMini').textContent = checked ? 'Dry-run' : 'Réel';
+  $('deleteModeBadge').innerHTML = checked ? statusChip('warning', 'Mode simulation') : statusChip('danger', 'Mode suppression réelle');
   refreshExecuteButtonState();
 }
 
 function updateBatchMini() {
   const value = $('deleteBatchSelect')?.value;
-  const label = value && value !== '__latest__' ? value : 'Dernier import';
-  $('deleteBatchMini').textContent = label;
+  $('deleteBatchMini').textContent = value && value !== '__latest__' ? value : 'Dernier import';
 }
 
 function appendTechLog(line) {
@@ -126,9 +114,7 @@ function renderEmptyAnalysis() {
   $('deletePreviewMini').textContent = 'Aucune analyse';
 }
 
-function mapRowReason(row) {
-  return row.exclusion_reason || row.message || '-';
-}
+function mapRowReason(row) { return row.exclusion_reason || row.message || '-'; }
 
 function renderRows(rows) {
   if (!rows.length) {
@@ -145,7 +131,7 @@ function renderRows(rows) {
       <td>${textCell(mapRowReason(row))}</td>
       <td>${textCell(row.dry_run_status || '-')}</td>
       <td>${textCell(row.dry_run_details || '-')}</td>
-      <td>${row.final_action_allowed ? '<span class=\"eligibility-tag good\">Autorisée</span>' : '<span class=\"eligibility-tag neutral\">Bloquée</span>'}</td>
+      <td>${row.final_action_allowed ? '<span class="eligibility-tag good">Autorisée</span>' : '<span class="eligibility-tag neutral">Bloquée</span>'}</td>
       <td>${row.final_action === 'real_delete_confirmed'
         ? '<span class="eligibility-tag good">Supprimé sur Passbolt</span>'
         : row.final_action === 'real_delete_not_confirmed'
@@ -186,24 +172,13 @@ function renderSummary(payload) {
     <div class="synthesis-item"><span>Admins protégés</span><strong>${admins}</strong></div>
     <div class="synthesis-item"><span>Erreurs / blocages</span><strong>${errors}</strong></div>
   `;
+
   const confirmed = rows.filter((r) => r.final_action === 'real_delete_confirmed').length;
   const notConfirmed = rows.filter((r) => r.final_action === 'real_delete_not_confirmed').length;
-  const outcome = $('deleteOutcomeBanner');
-  if (outcome) {
-    if (lastRunMode === 'dry-run') {
-      outcome.className = 'deletion-banner simulation';
-      outcome.textContent = 'Simulation uniquement : aucune suppression réelle n’a été envoyée.';
-    } else if (confirmed > 0 && notConfirmed === 0) {
-      outcome.className = 'deletion-banner success';
-      outcome.textContent = 'Suppression confirmée : utilisateur absent après contrôle.';
-    } else if (notConfirmed > 0) {
-      outcome.className = 'deletion-banner danger';
-      outcome.textContent = 'Suppression refusée par Passbolt : utilisateur encore présent.';
-    } else {
-      outcome.className = 'deletion-banner info';
-      outcome.textContent = 'Suppression réelle envoyée à Passbolt.';
-    }
-  }
+  if (lastRunMode === 'dry-run') setToast('Analyse dry-run terminée.', 'info');
+  else if (confirmed > 0 && notConfirmed === 0) setToast('Suppression validé', 'success');
+  else if (notConfirmed > 0) setToast('Suppression refusée par Passbolt : utilisateur encore présent.', 'error');
+  else setToast('Suppression réelle envoyée à Passbolt.', 'warning');
 }
 
 function refreshExecuteButtonState() {
@@ -237,7 +212,7 @@ export async function refreshDeleteConfig() {
     updateBatchMini();
     refreshExecuteButtonState();
   } catch (e) {
-    setToast(`Configuration suppression indisponible: ${e.message}`);
+    setToast(`Configuration suppression indisponible: ${e.message}`, 'error');
   }
 }
 
@@ -260,17 +235,15 @@ async function runDeleteStream(previewOnly) {
   $('deletePreviewBtn').disabled = true;
   $('deleteExecuteBtn').disabled = true;
   $('deleteTechLogs').textContent = '';
-  appendTechLog(
-    `UI | ${JSON.stringify({
-      ui_dry_run_state: dryRunState,
-      backend_dry_run_state: effectiveDryRun,
-      confirmation_checked: confirmationChecked,
-      eligible_count: lastEligibleCount,
-      blocking_errors: lastBlockingErrors,
-      has_deletable_status: hasDeletableStatus,
-      final_action: effectiveDryRun ? 'simulation_only' : (confirmationChecked ? 'real_delete_requested' : 'real_delete_not_confirmed')
-    }, null, 0)}`
-  );
+  appendTechLog(`UI | ${JSON.stringify({
+    ui_dry_run_state: dryRunState,
+    backend_dry_run_state: effectiveDryRun,
+    confirmation_checked: confirmationChecked,
+    eligible_count: lastEligibleCount,
+    blocking_errors: lastBlockingErrors,
+    has_deletable_status: hasDeletableStatus,
+    final_action: effectiveDryRun ? 'simulation_only' : (confirmationChecked ? 'real_delete_requested' : 'real_delete_not_confirmed')
+  }, null, 0)}`);
 
   try {
     const res = await fetch('/api/delete-users-stream', {
@@ -279,6 +252,7 @@ async function runDeleteStream(previewOnly) {
       body: JSON.stringify(body)
     });
     if (!res.ok || !res.body) throw new Error('Flux suppression indisponible');
+
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
@@ -295,18 +269,16 @@ async function runDeleteStream(previewOnly) {
         if (['log', 'stderr', 'stdout'].includes(event.type)) appendTechLog(`${event.type.toUpperCase()} | ${event.message}`);
         if (event.type === 'final') {
           const payload = event.payload || {};
-          appendTechLog(
-            `FINAL | ${JSON.stringify({
-              ui_dry_run_state: dryRunState,
-              backend_dry_run_state: Boolean(payload.dry_run_only),
-              confirmation_checked: confirmationChecked,
-              eligible_count: lastEligibleCount,
-              endpoint_called: (payload.results || []).map((r) => r.endpoint_called).filter(Boolean),
-              http_method: (payload.results || []).map((r) => r.http_method).filter(Boolean),
-              http_status: (payload.results || []).map((r) => r.http_status).filter((s) => s !== undefined),
-              final_action: (payload.results || []).map((r) => r.final_action),
-            }, null, 0)}`
-          );
+          appendTechLog(`FINAL | ${JSON.stringify({
+            ui_dry_run_state: dryRunState,
+            backend_dry_run_state: Boolean(payload.dry_run_only),
+            confirmation_checked: confirmationChecked,
+            eligible_count: lastEligibleCount,
+            endpoint_called: (payload.results || []).map((r) => r.endpoint_called).filter(Boolean),
+            http_method: (payload.results || []).map((r) => r.http_method).filter(Boolean),
+            http_status: (payload.results || []).map((r) => r.http_status).filter((s) => s !== undefined),
+            final_action: (payload.results || []).map((r) => r.final_action)
+          }, null, 0)}`);
           state.deletePreviewDone = true;
           previewExecuted = true;
           renderRows(payload.results || []);
@@ -324,10 +296,9 @@ async function runDeleteStream(previewOnly) {
       lastEligibleCount = 0;
       lastBlockingErrors = 0;
       refreshExecuteButtonState();
-      setToast('Suppression réelle terminée.');
     }
   } catch (e) {
-    setToast(`Erreur suppression: ${e.message}`);
+    setToast(`Erreur suppression: ${e.message}`, 'error');
   } finally {
     $('deletePreviewBtn').disabled = false;
     refreshExecuteButtonState();
