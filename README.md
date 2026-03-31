@@ -118,8 +118,8 @@ importer-api (Flask, :9090)
 ## 🚀 Installation / démarrage rapide
 
 ```bash
-git clone https://github.com/Alidrix/TheTrendScope.git
-cd TheTrendScope
+git clone https://github.com/Alidrix/PassBolt_Cockpit.git
+cd PassBolt_Cockpit
 ```
 
 1. Créez/ajustez votre `.env` à la racine (voir section variables).
@@ -164,7 +164,10 @@ docker compose --env-file .env up -d --build
 | `PASSBOLT_CONTAINER` | `passbolt-passbolt-1` | Nom conteneur Passbolt ciblé pour le CLI |
 | `PASSBOLT_CLI_PATH` | `/usr/share/php/passbolt/bin/cake` | Chemin CLI `cake` dans le conteneur Passbolt |
 | `IMPORT_COMMAND_TIMEOUT` | `60` | Timeout commande unitaire |
-| `IMPORT_TOTAL_TIMEOUT` | `60` | Timeout global import |
+| `IMPORT_TOTAL_TIMEOUT` | `900` | Timeout global import (gros volume) |
+| `IMPORT_BATCH_SIZE` | `100` | Taille batch import (recommandé: `50`, `100`, `200`) |
+| `IMPORT_LARGE_MODE_THRESHOLD` | `200` | Active automatiquement le mode gros volume au-delà de ce nombre de lignes CSV |
+| `IMPORT_BATCH_DELAY_SECONDS` | `1` | Temporisation entre batchs en mode gros volume (1-3 secondes) |
 
 ### Point d’attention secret (`$` dans passphrase)
 
@@ -182,6 +185,10 @@ Dans `docker-compose.yml`, `PASSBOLT_API_PASSPHRASE` est injectée en **clé seu
 | `GET` | `/api/delete-config-status` | État de configuration suppression côté Passbolt |
 | `GET`,`POST` | `/api/passbolt/health` | Diagnostic Passbolt complet |
 | `POST` | `/api/import-stream` | Import CSV streamé |
+| `GET` | `/api/import-jobs` | Vue parent/enfants des jobs batchés + reprise |
+| `GET` | `/api/groups/overview` | Groupes tracés par batch/import |
+| `GET` | `/api/config/exploitation` | Configuration effective (sans secrets) + warnings |
+| `GET` | `/api/anomalies/attention` | Anomalies d’exploitation (imports partiels, affectations différées, etc.) |
 | `POST` | `/api/delete-users-stream` | Suppression streamée d’un batch |
 | `GET` | `/api/batches` | Liste des batches |
 | `GET` | `/api/logs` | Logs applicatifs |
@@ -219,6 +226,35 @@ La suppression s’appuie sur le principe suivant :
 3. Suppression effective uniquement si les pré-contrôles sont validés.
 
 Résultat : réduction du risque de suppression destructive non maîtrisée.
+
+---
+
+## 📦 Mode batch / gros volume / reprise
+
+- Le mode **large import** s’active automatiquement si le CSV dépasse `IMPORT_LARGE_MODE_THRESHOLD` (défaut `200` lignes).
+- L’import est batché via `IMPORT_BATCH_SIZE` (défaut `100`).
+- Chaque batch est rattaché à un `import_job_id` parent.
+- En cas d’échec sur un batch `N`, les batchs `1..N-1` restent conservés et la reprise se fait à partir de `N`.
+- Une temporisation optionnelle (`IMPORT_BATCH_DELAY_SECONDS`) soulage l’API Passbolt sur forte charge.
+
+---
+
+## 🧭 Sidebar opérationnelle (UI)
+
+La navigation cockpit sépare désormais :
+
+- Dashboard
+- Imports
+- Jobs / Batchs globaux
+- Groupes
+- Affectations en attente
+- Suppressions
+- Blocages / Transferts
+- Anomalies / Attention Required
+- Santé API Passbolt
+- Configuration / Exploitation
+- Historique
+- Logs & audit
 
 ---
 
@@ -407,5 +443,5 @@ docker compose logs --tail=300 importer-api
 
 ## 👤 Auteur / licence
 
-- Repository : **Alidrix/TheTrendScope**
-- Licence : aucune licence explicite détectée à la racine du dépôt.
+- Repository : **Alidrix/PassBolt_Cockpit**
+- Licence : voir `LICENSE` (MIT).

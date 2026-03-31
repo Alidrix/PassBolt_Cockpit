@@ -73,7 +73,7 @@ async function runImportFlow() {
   try {
     const form = new FormData();
     form.append('file', f);
-    form.append('dry_run_only', 'true');
+    form.append('dry_run_only', 'false');
 
     const res = await fetch('/api/import-stream', { method: 'POST', body: form });
     if (!res.ok) {
@@ -99,8 +99,9 @@ async function runImportFlow() {
         if (event.type === 'progress') {
           const p = event.payload || {};
           const percent = p.global_progress ?? p.percent ?? 0;
+          const metrics = p.metrics || {};
           const stage = p.current_batch
-            ? `${p.stage || 'batch'} · ${p.current_batch}/${p.total_batches || '?'}`
+            ? `${p.stage || 'batch'} · ${p.current_batch}/${p.total_batches || '?'}${metrics.estimated_remaining_time ? ` · ETA ${Math.round(metrics.estimated_remaining_time)}s` : ''}`
             : (p.stage || 'preview');
           setImportProgress(percent, stage);
         }
@@ -146,7 +147,9 @@ function renderImportFinal(payload) {
     ['Groupes assignés', s.groups_assigned || 0],
     ['Erreurs', s.errors || 0],
     ['Import Job', payload.import_job_id || '-'],
-    ['Batchs', `${payload.current_batch || 0}/${payload.total_batches || 0}`]
+    ['Batchs', `${payload.current_batch || 0}/${payload.total_batches || 0}`],
+    ['Large mode', payload.mode?.large_import_mode ? 'enabled' : 'disabled'],
+    ['Throughput', payload.metrics?.avg_users_per_second ? `${payload.metrics.avg_users_per_second}/s` : '-']
   ];
   $('importSummaryCards').innerHTML = cards.map(([label, value]) => kpiCard(label, value)).join('');
   $('importResultsRows').innerHTML = state.latestImportResults.map((row) => {
