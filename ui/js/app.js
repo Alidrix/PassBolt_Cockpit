@@ -6,13 +6,33 @@ import { renderDeletionsView, refreshDeleteConfig } from './views/deletions.js';
 import { renderHistoryView, refreshHistory } from './views/history.js';
 import { renderLogsView, refreshLogs } from './views/logs.js';
 import { renderPassboltHealthView, refreshPassboltHealth } from './views/passbolt-health.js';
+import {
+  renderJobsBatchView,
+  refreshJobsBatchView,
+  renderGroupsView,
+  refreshGroupsView,
+  renderPendingAssignmentsView,
+  refreshPendingAssignmentsView,
+  renderBlockagesView,
+  refreshBlockagesView,
+  renderConfigOpsView,
+  refreshConfigOpsView,
+  renderAnomaliesView,
+  refreshAnomaliesView
+} from './views/ops-pages.js';
 
 const refreshByView = {
   dashboardView: refreshDashboard,
   deletionsView: refreshDeleteConfig,
   historyView: refreshHistory,
   logsAuditView: refreshLogs,
-  passboltHealthView: refreshPassboltHealth
+  passboltHealthView: refreshPassboltHealth,
+  jobsBatchView: refreshJobsBatchView,
+  groupsView: refreshGroupsView,
+  pendingAssignmentsView: refreshPendingAssignmentsView,
+  blockagesView: refreshBlockagesView,
+  configOpsView: refreshConfigOpsView,
+  anomaliesView: refreshAnomaliesView
 };
 
 function refreshActiveView() {
@@ -46,9 +66,15 @@ function renderLayout() {
   renderDashboardView();
   renderImporterView();
   renderDeletionsView();
+  renderJobsBatchView();
+  renderGroupsView();
+  renderPendingAssignmentsView();
+  renderBlockagesView();
+  renderAnomaliesView();
   renderHistoryView();
   renderLogsView();
   renderPassboltHealthView();
+  renderConfigOpsView();
 }
 
 function init() {
@@ -64,7 +90,19 @@ function init() {
     refreshActiveView().then(() => setToast('Vue actualisée.', 'info')).catch((e) => setToast(e.message, 'error'));
   });
 
-  Promise.all([refreshDashboard(), refreshDeleteConfig(), refreshHistory(), refreshLogs(), refreshPassboltHealth()])
+  Promise.all([
+    refreshDashboard(),
+    refreshDeleteConfig(),
+    refreshHistory(),
+    refreshLogs(),
+    refreshPassboltHealth(),
+    refreshJobsBatchView(),
+    refreshGroupsView(),
+    refreshPendingAssignmentsView(),
+    refreshBlockagesView(),
+    refreshAnomaliesView(),
+    refreshConfigOpsView()
+  ])
     .catch((e) => setToast(e.message, 'error'));
 }
 
