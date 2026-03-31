@@ -67,8 +67,10 @@ init_db()
 PASSBOLT_CONTAINER = os.getenv("PASSBOLT_CONTAINER", "passbolt-passbolt-1")
 PASSBOLT_CLI_PATH = os.getenv("PASSBOLT_CLI_PATH", "/usr/share/php/passbolt/bin/cake")
 IMPORT_COMMAND_TIMEOUT = int(os.getenv("IMPORT_COMMAND_TIMEOUT", "60"))
-IMPORT_TOTAL_TIMEOUT = int(os.getenv("IMPORT_TOTAL_TIMEOUT", "60"))
+IMPORT_TOTAL_TIMEOUT = int(os.getenv("IMPORT_TOTAL_TIMEOUT", "900"))
 IMPORT_BATCH_SIZE = int(os.getenv("IMPORT_BATCH_SIZE", "100"))
+IMPORT_LARGE_MODE_THRESHOLD = int(os.getenv("IMPORT_LARGE_MODE_THRESHOLD", "200"))
+IMPORT_BATCH_DELAY_SECONDS = float(os.getenv("IMPORT_BATCH_DELAY_SECONDS", "1"))
 ROLLBACK_COMMAND = os.getenv("PASSBOLT_ROLLBACK_COMMAND", "")
 PASSBOLT_URL = os.getenv("PASSBOLT_URL", "").rstrip("/")
 PASSBOLT_VERIFY_TLS = os.getenv("PASSBOLT_VERIFY_TLS", "true").lower() not in {"0", "false", "no"}
@@ -2154,6 +2156,48 @@ def _chunk_rows(rows: list[dict[str, Any]], chunk_size: int) -> list[list[dict[s
     return [rows[index:index + size] for index in range(0, len(rows), size)] or [[]]
 
 
+def _resolve_import_mode(total_rows: int) -> dict[str, Any]:
+    large_import_mode = total_rows > IMPORT_LARGE_MODE_THRESHOLD
+    return {
+        "large_import_mode": large_import_mode,
+        "large_import_threshold": IMPORT_LARGE_MODE_THRESHOLD,
+        "batch_size": IMPORT_BATCH_SIZE,
+        "batch_delay_seconds": IMPORT_BATCH_DELAY_SECONDS if large_import_mode else 0,
+    }
+
+
+def _build_batch_metrics(
+    *,
+    import_job_id: str,
+    batch_index: int,
+    total_batches: int,
+    rows_in_batch: int,
+    processed_count: int,
+    success_count: int,
+    error_count: int,
+    started_at: float,
+    total_rows: int,
+) -> dict[str, Any]:
+    elapsed = max(time.time() - started_at, 0.0001)
+    avg_users_per_second = round(processed_count / elapsed, 3)
+    remaining = max(total_rows - processed_count, 0)
+    estimated_remaining_time = round((remaining / avg_users_per_second), 2) if avg_users_per_second > 0 else None
+    return {
+        "import_job_id": import_job_id,
+        "total_rows": total_rows,
+        "batch_size": IMPORT_BATCH_SIZE,
+        "current_batch": batch_index,
+        "total_batches": total_batches,
+        "rows_in_batch": rows_in_batch,
+        "processed_count": processed_count,
+        "success_count": success_count,
+        "error_count": error_count,
+        "elapsed_time": round(elapsed, 2),
+        "avg_users_per_second": avg_users_per_second,
+        "estimated_remaining_time": estimated_remaining_time,
+    }
+
+
 @app.route("/health", methods=["GET"])
 def health() -> Any:
     diagnostics = diagnose_environment()
@@ -2167,6 +2211,9 @@ def health() -> Any:
         "cli_path": diagnostics.get("resolved_cli_path", PASSBOLT_CLI_PATH),
         "timeout_seconds": IMPORT_COMMAND_TIMEOUT,
         "total_timeout_seconds": IMPORT_TOTAL_TIMEOUT,
+        "batch_size": IMPORT_BATCH_SIZE,
+        "large_import_threshold": IMPORT_LARGE_MODE_THRESHOLD,
+        "batch_delay_seconds": IMPORT_BATCH_DELAY_SECONDS,
         "docker": {
             "sdk_ok": docker_check.get("ok", False),
             "visible_containers": docker_check.get("visible_containers", 0),
@@ -2236,6 +2283,11 @@ def import_csv() -> Any:
 
     import_job_id = str(uuid.uuid4())
     chunks = _chunk_rows(rows, IMPORT_BATCH_SIZE)
+    import_mode = _resolve_import_mode(len(rows))
+    started_at = time.time()
+    processed_count = 0
+    success_count = 0
+    error_count = 0
     batch_payloads: list[dict[str, Any]] = []
     for index, chunk in enumerate(chunks, start=1):
         payload = _process_rows(
@@ -2249,6 +2301,22 @@ def import_csv() -> Any:
             total_batches=len(chunks),
         )
         batch_payloads.append(payload)
+        processed_count += len(chunk)
+        success_count += int(payload.get("success", 0))
+        error_count += max(len(chunk) - int(payload.get("success", 0)), 0)
+        payload["metrics"] = _build_batch_metrics(
+            import_job_id=import_job_id,
+            batch_index=index,
+            total_batches=len(chunks),
+            rows_in_batch=len(chunk),
+            processed_count=processed_count,
+            success_count=success_count,
+            error_count=error_count,
+            started_at=started_at,
+            total_rows=len(rows),
+        )
+        if import_mode["large_import_mode"] and index < len(chunks):
+            time.sleep(import_mode["batch_delay_seconds"])
     summary = {
         "users_created": sum(int(item.get("summary", {}).get("users_created", 0)) for item in batch_payloads),
         "groups_created": sum(int(item.get("summary", {}).get("groups_created", 0)) for item in batch_payloads),
@@ -2268,6 +2336,18 @@ def import_csv() -> Any:
         "current_batch": len(chunks),
         "total_batches": len(chunks),
         "global_progress": 100,
+        "mode": import_mode,
+        "metrics": _build_batch_metrics(
+            import_job_id=import_job_id,
+            batch_index=len(chunks),
+            total_batches=len(chunks),
+            rows_in_batch=len(chunks[-1]) if chunks else 0,
+            processed_count=processed_count,
+            success_count=success_count,
+            error_count=error_count,
+            started_at=started_at,
+            total_rows=len(rows),
+        ),
     }
     return jsonify(payload)
 
@@ -2291,7 +2371,12 @@ def import_csv_stream() -> Any:
     @stream_with_context
     def generate() -> Any:
         chunks = _chunk_rows(rows, IMPORT_BATCH_SIZE)
+        import_mode = _resolve_import_mode(len(rows))
         import_job_id = resume_import_job_id or str(uuid.uuid4())
+        started_at = time.time()
+        processed_count = 0
+        success_count = 0
+        error_count = 0
         start_batch = 1
         if resume_import_job_id:
             existing = list_batches_for_import_job(import_job_id)
@@ -2302,6 +2387,8 @@ def import_csv_stream() -> Any:
                 start_batch = len(existing) + 1
         _save_live_log("import", "info", f"Import stream started for {len(rows)} row(s)", event_code="import.stream.start", payload={"import_job_id": import_job_id, "total_batches": len(chunks), "resume_from_batch": start_batch})
         yield json.dumps({"type": "log", "message": f"Import started for {len(rows)} row(s) · import_job_id={import_job_id}"}, ensure_ascii=False) + "\n"
+        if import_mode["large_import_mode"]:
+            yield json.dumps({"type": "log", "message": f"large import mode enabled · threshold={import_mode['large_import_threshold']} · batch_size={import_mode['batch_size']} · batch_delay={import_mode['batch_delay_seconds']}s"}, ensure_ascii=False) + "\n"
         yield json.dumps({"type": "debug", "payload": diagnostics}, ensure_ascii=False) + "\n"
 
         event_queue: Queue[Any] = Queue()
@@ -2334,6 +2421,21 @@ def import_csv_stream() -> Any:
                         total_batches=len(chunks),
                     )
                     batch_payloads.append(payload)
+                    processed_count += len(chunk)
+                    success_count += int(payload.get("success", 0))
+                    error_count += max(len(chunk) - int(payload.get("success", 0)), 0)
+                    metrics = _build_batch_metrics(
+                        import_job_id=import_job_id,
+                        batch_index=index,
+                        total_batches=len(chunks),
+                        rows_in_batch=len(chunk),
+                        processed_count=processed_count,
+                        success_count=success_count,
+                        error_count=error_count,
+                        started_at=started_at,
+                        total_rows=len(rows),
+                    )
+                    payload["metrics"] = metrics
                     event_queue.put(
                         {
                             "type": "progress",
@@ -2342,9 +2444,12 @@ def import_csv_stream() -> Any:
                                 "current_batch": index,
                                 "total_batches": len(chunks),
                                 "global_progress": round((index / max(len(chunks), 1)) * 100, 2),
+                                "metrics": metrics,
                             },
                         }
                     )
+                    if import_mode["large_import_mode"] and index < len(chunks):
+                        time.sleep(import_mode["batch_delay_seconds"])
                 combined_results = [entry for item in batch_payloads for entry in item.get("results", [])]
                 summary = {
                     "users_created": sum(int(item.get("summary", {}).get("users_created", 0)) for item in batch_payloads),
@@ -2365,6 +2470,18 @@ def import_csv_stream() -> Any:
                     "current_batch": len(chunks),
                     "total_batches": len(chunks),
                     "global_progress": 100,
+                    "mode": import_mode,
+                    "metrics": _build_batch_metrics(
+                        import_job_id=import_job_id,
+                        batch_index=len(chunks),
+                        total_batches=len(chunks),
+                        rows_in_batch=len(chunks[-1]) if chunks else 0,
+                        processed_count=processed_count,
+                        success_count=success_count,
+                        error_count=error_count,
+                        started_at=started_at,
+                        total_rows=len(rows),
+                    ),
                 }
                 _save_live_log("import", "info", "Import stream completed", event_code="import.stream.done", payload={"status": final_payload.get("status"), "total": final_payload.get("total"), "import_job_id": import_job_id, "total_batches": len(chunks)})
                 event_queue.put({"type": "final", "payload": final_payload})
@@ -2505,6 +2622,108 @@ def retry_pending_group_assignments() -> Any:
         PENDING_ASSIGNMENTS.extend(still_pending)
 
     return jsonify({"retried": retried, "pending": still_pending, "pending_total": len(still_pending)})
+
+
+@app.route("/api/import-jobs", methods=["GET"])
+def import_jobs_overview() -> Any:
+    jobs = list_import_batches()
+    items: list[dict[str, Any]] = []
+    for job in jobs:
+        import_job_id = str(job.get("import_job_id") or "")
+        child_batches = list_batches_for_import_job(import_job_id)
+        completed = sum(1 for item in child_batches if str(item.get("status")) == "completed")
+        failed = sum(1 for item in child_batches if str(item.get("status")) == "failed")
+        progress = round((completed / max(len(child_batches), 1)) * 100, 2)
+        resume_candidates = [int(item.get("batch_index") or 1) for item in child_batches if str(item.get("status")) != "completed"]
+        items.append({
+            **job,
+            "child_batches": child_batches,
+            "progress_percent": progress,
+            "resume_from_batch": min(resume_candidates) if resume_candidates else None,
+            "failed_batches": failed,
+            "sub_jobs_total": len(child_batches),
+        })
+    return jsonify({"total": len(items), "items": items})
+
+
+@app.route("/api/groups/overview", methods=["GET"])
+def groups_overview() -> Any:
+    jobs = list_import_batches()
+    groups: list[dict[str, Any]] = []
+    for job in jobs:
+        for batch in list_batches_for_import_job(str(job.get("import_job_id") or "")):
+            batch_uuid = str(batch.get("batch_uuid") or "")
+            for group in list_batch_groups(batch_uuid):
+                groups.append({
+                    **group,
+                    "import_job_id": job.get("import_job_id"),
+                    "batch_index": batch.get("batch_index"),
+                    "origin": "batch_created" if int(group.get("group_created_by_batch") or 0) == 1 else "preexisting",
+                })
+    return jsonify({"total": len(groups), "items": groups})
+
+
+@app.route("/api/config/exploitation", methods=["GET"])
+def config_exploitation() -> Any:
+    def env_source(name: str, fallback: str | int | float) -> str:
+        return ".env/environment" if os.getenv(name) is not None else f"fallback({fallback})"
+
+    payload = {
+        "mode": {
+            "large_import_mode_enabled": True,
+            "large_import_threshold": IMPORT_LARGE_MODE_THRESHOLD,
+            "batch_size": IMPORT_BATCH_SIZE,
+            "batch_delay_seconds": IMPORT_BATCH_DELAY_SECONDS,
+            "import_total_timeout_seconds": IMPORT_TOTAL_TIMEOUT,
+        },
+        "runtime": {
+            "passbolt_container": PASSBOLT_CONTAINER,
+            "passbolt_cli_path": PASSBOLT_CLI_PATH,
+            "passbolt_url": PASSBOLT_URL,
+            "tls_mode": "verify" if PASSBOLT_API_VERIFY_TLS else "insecure",
+            "gnupghome": PASSBOLT_API_GNUPGHOME,
+            "private_key_path": PASSBOLT_API_PRIVATE_KEY_PATH,
+            "ca_bundle_path": PASSBOLT_API_CA_BUNDLE,
+            "totp_secret_status": {
+                "present": bool(PASSBOLT_API_TOTP_SECRET),
+                "base32_like": bool(re.fullmatch(r"[A-Z2-7=]+", PASSBOLT_API_TOTP_SECRET or "")),
+                "source": env_source("PASSBOLT_API_TOTP_SECRET", ""),
+            },
+        },
+        "sources": {
+            "IMPORT_TOTAL_TIMEOUT": env_source("IMPORT_TOTAL_TIMEOUT", 900),
+            "IMPORT_BATCH_SIZE": env_source("IMPORT_BATCH_SIZE", 100),
+            "IMPORT_LARGE_MODE_THRESHOLD": env_source("IMPORT_LARGE_MODE_THRESHOLD", 200),
+            "IMPORT_BATCH_DELAY_SECONDS": env_source("IMPORT_BATCH_DELAY_SECONDS", 1),
+            "PASSBOLT_API_VERIFY_TLS": env_source("PASSBOLT_API_VERIFY_TLS", "true"),
+        },
+        "mounted_files": {
+            "private_key_exists": os.path.exists(PASSBOLT_API_PRIVATE_KEY_PATH) if PASSBOLT_API_PRIVATE_KEY_PATH else False,
+            "gnupghome_exists": os.path.exists(PASSBOLT_API_GNUPGHOME) if PASSBOLT_API_GNUPGHOME else False,
+            "ca_bundle_exists": os.path.exists(PASSBOLT_API_CA_BUNDLE) if PASSBOLT_API_CA_BUNDLE else False,
+        },
+        "warnings": [],
+    }
+    if IMPORT_TOTAL_TIMEOUT < 900:
+        payload["warnings"].append("IMPORT_TOTAL_TIMEOUT inférieur à 900s pour du gros volume")
+    if IMPORT_BATCH_SIZE not in {50, 100, 200}:
+        payload["warnings"].append("IMPORT_BATCH_SIZE recommandé: 50, 100 ou 200")
+    return jsonify(payload)
+
+
+@app.route("/api/anomalies/attention", methods=["GET"])
+def anomalies_attention() -> Any:
+    jobs = list_import_batches()
+    pending = list_pending_group_assignments()
+    anomalies: list[dict[str, Any]] = []
+    for job in jobs:
+        if str(job.get("status")) in {"failed", "partial"}:
+            anomalies.append({"type": "imports_partial_or_failed", "import_job_id": job.get("import_job_id"), "status": job.get("status")})
+        if int(job.get("completed_batches") or 0) < int(job.get("total_batches") or 0):
+            anomalies.append({"type": "job_not_fully_completed", "import_job_id": job.get("import_job_id"), "completed_batches": job.get("completed_batches"), "total_batches": job.get("total_batches")})
+    for item in pending:
+        anomalies.append({"type": "assignment_deferred", "batch_uuid": item.get("batch_uuid"), "email": item.get("email"), "group_name": item.get("group_name"), "reason": item.get("deferred_reason")})
+    return jsonify({"total": len(anomalies), "items": anomalies})
 
 
 @app.route("/delete-config-status", methods=["GET"])
