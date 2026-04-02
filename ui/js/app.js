@@ -30,6 +30,12 @@ const viewRegistry = {
   configOpsView: { render: renderConfigOpsView, refresh: refreshConfigOpsView }
 };
 
+const refreshByView = Object.fromEntries(
+  Object.entries(viewRegistry)
+    .filter(([, cfg]) => typeof cfg.refresh === 'function')
+    .map(([viewId, cfg]) => [viewId, cfg.refresh])
+);
+
 function appendViewError(viewId, message) {
   const section = $(viewId);
   if (!section) return;
@@ -42,13 +48,46 @@ function appendViewError(viewId, message) {
   `;
 }
 
+async function safeRenderView(viewId, renderFn) {
+  if (typeof renderFn !== 'function') {
+    const message = `Render manquant pour '${viewId}' (export/import invalide ou absent).`;
+    console.error(message);
+    appendViewError(viewId, message);
+    setToast(message, 'error');
+    return;
+  }
+
+  try {
+    renderFn();
+  } catch (error) {
+    const message = `Render '${viewId}' en échec: ${error.message}`;
+    console.error(message, error);
+    appendViewError(viewId, message);
+    setToast(message, 'error');
+  }
+}
+
+async function safeRefreshView(viewId) {
+  console.info(`refreshView -> ${viewId}`);
+  const refreshFn = refreshByView[viewId];
+  if (typeof refreshFn !== 'function') return;
+
+  try {
+    await refreshFn();
+  } catch (error) {
+    const message = `Refresh '${viewId}' en échec: ${error.message}`;
+    console.error(message, error);
+    appendViewError(viewId, message);
+    setToast(message, 'error');
+  }
+}
+
 function refreshActiveView() {
-  const runner = viewRegistry[state.view]?.refresh;
-  return runner ? runner() : Promise.resolve();
+  return safeRefreshView(state.view);
 }
 
 function switchView(viewId) {
-  console.info(`view switch -> ${viewId}`);
+  console.info(`switchView -> ${viewId}`);
   if (!viewRegistry[viewId]) {
     const message = `Navigation impossible: la vue '${viewId}' est absente du registre.`;
     console.error(message);
@@ -65,15 +104,10 @@ function switchView(viewId) {
   }
 
   state.view = viewId;
-  document.querySelectorAll('.menu-item').forEach((a) => a.classList.toggle('active', a.dataset.view === viewId));
-  document.querySelectorAll('.view-section').forEach((v) => v.classList.toggle('active-view', v.id === viewId));
+  document.querySelectorAll('.menu-item').forEach((item) => item.classList.toggle('active', item.dataset.view === viewId));
+  document.querySelectorAll('.view-section').forEach((item) => item.classList.toggle('active-view', item.id === viewId));
 
-  refreshByView[viewId]?.().catch((error) => {
-    const message = `Refresh '${viewId}' en échec: ${error.message}`;
-    console.error(message, error);
-    appendViewError(viewId, message);
-    setToast(message, 'error');
-  });
+  safeRefreshView(viewId);
 }
 
 function initThemeToggle() {
@@ -91,26 +125,32 @@ function initThemeToggle() {
   });
 }
 
-const refreshByView = Object.fromEntries(
-  Object.entries(viewRegistry)
-    .filter(([, cfg]) => typeof cfg.refresh === 'function')
-    .map(([viewId, cfg]) => [viewId, cfg.refresh])
-);
-
 function validateNavigationWiring() {
   const menuItems = [...document.querySelectorAll('.menu-item')];
+
   menuItems.forEach((item) => {
     const viewId = item.dataset.view;
     if (!viewId) {
       console.error('Menu item sans data-view détecté.', item);
       return;
     }
+
     if (!viewRegistry[viewId]) {
       console.error(`Menu item invalide: '${viewId}' absent du registre.`);
       return;
     }
+
     if (!$(viewId)) {
       console.error(`Menu item invalide: section DOM manquante pour '${viewId}'.`);
+      return;
+    }
+
+    if (typeof viewRegistry[viewId].render !== 'function') {
+      console.error(`Vue '${viewId}' sans render function valide (import/export manquant).`);
+    }
+
+    if (viewRegistry[viewId].refresh && typeof viewRegistry[viewId].refresh !== 'function') {
+      console.error(`Vue '${viewId}' avec refresh non fonctionnel (import/export manquant).`);
     }
   });
 
@@ -124,19 +164,13 @@ function validateNavigationWiring() {
 function renderLayout() {
   console.info('renderLayout started');
   Object.entries(viewRegistry).forEach(([viewId, cfg]) => {
-    try {
-      cfg.render();
-    } catch (error) {
-      const message = `Render '${viewId}' en échec: ${error.message}`;
-      console.error(message, error);
-      appendViewError(viewId, message);
-      setToast(message, 'error');
-    }
+    safeRenderView(viewId, cfg.render);
   });
-  console.info('renderLayout done');
+  console.info('renderLayout finished');
 }
 
 function init() {
+  console.info('app init started');
   renderLayout();
   validateNavigationWiring();
   initThemeToggle();
@@ -147,14 +181,20 @@ function init() {
   }));
 
   $('globalRefresh')?.addEventListener('click', () => {
-    refreshActiveView().then(() => setToast('Vue actualisée.', 'info')).catch((e) => setToast(e.message, 'error'));
+    refreshActiveView()
+      .then(() => setToast('Vue actualisée.', 'info'))
+      .catch((error) => {
+        const message = `Refresh global en échec: ${error.message}`;
+        console.error(message, error);
+        setToast(message, 'error');
+      });
   });
 
-  Promise.allSettled(Object.values(refreshByView).map((runner) => runner()))
+  Promise.allSettled(Object.keys(refreshByView).map((viewId) => safeRefreshView(viewId)))
     .then((results) => {
       results.forEach((result) => {
         if (result.status === 'rejected') {
-          console.error('Erreur de refresh initial:', result.reason);
+          console.error('Erreur de refresh initial inattendue:', result.reason);
         }
       });
     });
