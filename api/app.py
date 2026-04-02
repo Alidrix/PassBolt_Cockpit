@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from queue import Queue
 from threading import Lock, Thread
 from typing import Any
+from xml.etree import ElementTree
 
 import docker
 import gnupg
@@ -34,8 +35,10 @@ from db import (
     list_logs,
     list_import_batches,
     log_delete_event,
+    list_passbolt_update_checks,
     purge_logs,
     save_log,
+    save_passbolt_update_check,
     save_imported_user,
     list_batch_groups,
     list_batches_for_import_job,
@@ -86,6 +89,10 @@ PASSBOLT_API_MFA_PROVIDER = (os.getenv("PASSBOLT_API_MFA_PROVIDER", "totp") or "
 PASSBOLT_API_TOTP_SECRET = os.getenv("PASSBOLT_API_TOTP_SECRET", "").strip()
 PASSBOLT_API_TIMEOUT = int(os.getenv("PASSBOLT_API_TIMEOUT", "30"))
 PASSBOLT_API_DEBUG = os.getenv("PASSBOLT_API_DEBUG", "false").lower() in {"1", "true", "yes"}
+PASSBOLT_UPDATES_OFFICIAL_CHANGELOG_URL = os.getenv("PASSBOLT_UPDATES_OFFICIAL_CHANGELOG_URL", "https://www.passbolt.com/changelog")
+PASSBOLT_UPDATES_OFFICIAL_RSS_URL = os.getenv("PASSBOLT_UPDATES_OFFICIAL_RSS_URL", "https://www.passbolt.com/feed.xml")
+PASSBOLT_UPDATES_GITHUB_API_RELEASE_URL = os.getenv("PASSBOLT_UPDATES_GITHUB_API_RELEASE_URL", "https://api.github.com/repos/passbolt/passbolt_api/releases/latest")
+PASSBOLT_UPDATES_BROWSER_EXTENSION_RELEASE_URL = os.getenv("PASSBOLT_UPDATES_BROWSER_EXTENSION_RELEASE_URL", "https://api.github.com/repos/passbolt/passbolt_browser_extension/releases/latest")
 
 DELETE_ALLOWED_PENDING_STATES = {"pending", "unknown", "", None}
 DELETE_ACTIVE_STATES = {"active", "activated", "setup_completed", "enabled"}
@@ -2198,6 +2205,213 @@ def _build_batch_metrics(
     }
 
 
+def _parse_version(value: str | None) -> tuple[int, int, int]:
+    raw = str(value or "").strip().lower().replace("_", ".")
+    matched = re.search(r"(\d+)\.(\d+)\.(\d+)", raw)
+    if matched:
+        return int(matched.group(1)), int(matched.group(2)), int(matched.group(3))
+    fallback = re.findall(r"\d+", raw)
+    if len(fallback) >= 3:
+        return int(fallback[0]), int(fallback[1]), int(fallback[2])
+    return 0, 0, 0
+
+
+def _extract_version_from_text(value: str | None) -> str:
+    text = str(value or "")
+    matched = re.search(r"(\d+\.\d+\.\d+)", text)
+    return matched.group(1) if matched else ""
+
+
+def _normalize_release_type(title: str | None, body: str | None = None) -> str:
+    text = f"{title or ''} {body or ''}".lower()
+    if any(token in text for token in ["security", "cve", "vulnerability", "critical"]):
+        return "security"
+    if any(token in text for token in ["bugfix", "maintenance", "fix", "patch"]):
+        return "maintenance"
+    return "feature"
+
+
+def _severity_from_release_type(release_type: str, update_available: bool) -> str:
+    if not update_available:
+        return "none"
+    if release_type == "security":
+        return "critical"
+    if release_type == "maintenance":
+        return "normal"
+    return "normal"
+
+
+def _status_from_update(update_available: bool, release_type: str) -> str:
+    if not update_available:
+        return "up_to_date"
+    if release_type == "security":
+        return "critical_update"
+    return "update_available"
+
+
+def _http_get(url: str, timeout: int = 12) -> requests.Response:
+    headers = {"User-Agent": "Passbolt-Cockpit/1.0 (+update-checker)"}
+    return requests.get(url, timeout=timeout, headers=headers)
+
+
+def _fetch_latest_from_github(url: str, source_name: str) -> dict[str, Any]:
+    try:
+        response = _http_get(url)
+        payload = response.json() if response.ok else {}
+        tag = str(payload.get("tag_name") or payload.get("name") or "")
+        version = _extract_version_from_text(tag)
+        return {
+            "source": source_name,
+            "ok": bool(version),
+            "remote_version": version,
+            "published_at": payload.get("published_at") or payload.get("created_at"),
+            "raw_release_title": payload.get("name") or payload.get("tag_name") or "",
+            "release_type": _normalize_release_type(payload.get("name"), payload.get("body")),
+            "http_status": response.status_code,
+        }
+    except Exception as error:
+        return {"source": source_name, "ok": False, "error": str(error)}
+
+
+def _fetch_latest_from_rss(url: str) -> dict[str, Any]:
+    try:
+        response = _http_get(url)
+        xml_text = response.text or ""
+        root = ElementTree.fromstring(xml_text)
+        item = root.find(".//channel/item") or root.find(".//item") or root.find(".//entry")
+        title = ""
+        pub_date = ""
+        if item is not None:
+            title = (item.findtext("title") or item.findtext("{http://www.w3.org/2005/Atom}title") or "").strip()
+            pub_date = (item.findtext("pubDate") or item.findtext("{http://www.w3.org/2005/Atom}updated") or "").strip()
+        version = _extract_version_from_text(title)
+        return {
+            "source": "rss",
+            "ok": bool(version),
+            "remote_version": version,
+            "published_at": pub_date,
+            "raw_release_title": title,
+            "release_type": _normalize_release_type(title),
+            "http_status": response.status_code,
+        }
+    except Exception as error:
+        return {"source": "rss", "ok": False, "error": str(error)}
+
+
+def _fetch_latest_from_changelog(url: str) -> dict[str, Any]:
+    try:
+        response = _http_get(url)
+        html = response.text or ""
+        heading = re.search(r"<h[1-3][^>]*>(.*?)</h[1-3]>", html, flags=re.IGNORECASE | re.DOTALL)
+        title = re.sub(r"<[^>]+>", " ", heading.group(1)).strip() if heading else ""
+        if not title:
+            title = "changelog"
+        version = _extract_version_from_text(html) or _extract_version_from_text(title)
+        return {
+            "source": "official_changelog",
+            "ok": bool(version),
+            "remote_version": version,
+            "published_at": "",
+            "raw_release_title": title,
+            "release_type": _normalize_release_type(title),
+            "http_status": response.status_code,
+        }
+    except Exception as error:
+        return {"source": "official_changelog", "ok": False, "error": str(error)}
+
+
+def _resolve_local_passbolt_version() -> str:
+    if os.getenv("PASSBOLT_LOCAL_VERSION"):
+        return _extract_version_from_text(os.getenv("PASSBOLT_LOCAL_VERSION", ""))
+
+    container_name = _detect_container()
+    cli_path = _detect_cli_path(container_name)
+    probe = _run_shell_command(container_name, cli_path, f"{shlex.quote(cli_path)} passbolt version")
+    local_version = _extract_version_from_text(probe.get("stdout") or probe.get("stderr") or "")
+    if local_version:
+        return local_version
+
+    try:
+        if docker_client is not None:
+            container = docker_client.containers.get(container_name)
+            tags = container.image.tags or []
+            for tag in tags:
+                maybe = _extract_version_from_text(tag)
+                if maybe:
+                    return maybe
+    except Exception:
+        pass
+    return ""
+
+
+def _run_passbolt_update_check() -> dict[str, Any]:
+    local_version = _resolve_local_passbolt_version()
+    checks = [
+        _fetch_latest_from_changelog(PASSBOLT_UPDATES_OFFICIAL_CHANGELOG_URL),
+        _fetch_latest_from_rss(PASSBOLT_UPDATES_OFFICIAL_RSS_URL),
+        _fetch_latest_from_github(PASSBOLT_UPDATES_GITHUB_API_RELEASE_URL, "github_api"),
+        _fetch_latest_from_github(PASSBOLT_UPDATES_BROWSER_EXTENSION_RELEASE_URL, "github_browser_extension"),
+    ]
+    valid = [item for item in checks if item.get("ok") and item.get("remote_version")]
+    preferred_sources = ["official_changelog", "rss", "github_api", "github_browser_extension"]
+    selected = {}
+    for source_name in preferred_sources:
+        candidate = next((item for item in valid if item.get("source") == source_name), None)
+        if candidate:
+            selected = candidate
+            break
+    if not selected and valid:
+        selected = max(valid, key=lambda item: _parse_version(item.get("remote_version")))
+    selected_version = selected.get("remote_version", "")
+    local_tuple = _parse_version(local_version)
+    remote_tuple = _parse_version(selected_version)
+    update_available = bool(selected_version and local_version and remote_tuple > local_tuple) or (bool(selected_version) and not local_version)
+    release_type = str(selected.get("release_type") or "feature")
+    status = _status_from_update(update_available, release_type)
+    severity = _severity_from_release_type(release_type, update_available)
+    checked_at = datetime.now(timezone.utc).isoformat()
+    payload = {
+        "local_version": local_version or None,
+        "remote_version": selected_version or None,
+        "source_checked": selected.get("source") or "unavailable",
+        "checked_at": checked_at,
+        "update_available": update_available,
+        "severity": severity,
+        "status": status,
+        "release_type": release_type,
+        "published_at": selected.get("published_at") or None,
+        "raw_release_title": selected.get("raw_release_title") or "",
+        "sources": checks,
+    }
+    save_passbolt_update_check(
+        local_version=payload["local_version"],
+        remote_version=payload["remote_version"],
+        source_checked=str(payload["source_checked"]),
+        update_available=bool(payload["update_available"]),
+        severity=str(payload["severity"]),
+        status=str(payload["status"]),
+        published_at=payload["published_at"],
+        release_type=payload["release_type"],
+        raw_release_title=payload["raw_release_title"],
+    )
+    _save_live_log(
+        "system",
+        "warning" if update_available else "info",
+        "Passbolt update check completed",
+        event_code="passbolt.update.check",
+        payload={
+            "local_version": payload["local_version"],
+            "remote_version": payload["remote_version"],
+            "source_checked": payload["source_checked"],
+            "checked_at": payload["checked_at"],
+            "update_available": payload["update_available"],
+            "severity": payload["severity"],
+            "raw_release_title": payload["raw_release_title"],
+        },
+    )
+    return payload
+
+
 @app.route("/health", methods=["GET"])
 def health() -> Any:
     diagnostics = diagnose_environment()
@@ -2724,6 +2938,29 @@ def anomalies_attention() -> Any:
     for item in pending:
         anomalies.append({"type": "assignment_deferred", "batch_uuid": item.get("batch_uuid"), "email": item.get("email"), "group_name": item.get("group_name"), "reason": item.get("deferred_reason")})
     return jsonify({"total": len(anomalies), "items": anomalies})
+
+
+@app.route("/api/passbolt/updates/check", methods=["GET", "POST"])
+def passbolt_updates_check() -> Any:
+    try:
+        payload = _run_passbolt_update_check()
+        return jsonify(payload)
+    except Exception as error:
+        return _json_error("Unable to check Passbolt updates", 500, details=str(error))
+
+
+@app.route("/api/passbolt/updates/history", methods=["GET"])
+def passbolt_updates_history() -> Any:
+    try:
+        limit_arg = request.args.get("limit", "20")
+        try:
+            limit = int(limit_arg)
+        except ValueError:
+            limit = 20
+        items = list_passbolt_update_checks(limit=limit)
+        return jsonify({"total": len(items), "items": items})
+    except Exception as error:
+        return _json_error("Unable to load Passbolt update history", 500, details=str(error))
 
 
 @app.route("/delete-config-status", methods=["GET"])

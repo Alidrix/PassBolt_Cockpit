@@ -154,6 +154,24 @@ def init_db() -> None:
             """
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_pending_assignments_batch_uuid ON pending_group_assignments(batch_uuid)")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS passbolt_update_checks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                local_version TEXT,
+                remote_version TEXT,
+                source_checked TEXT NOT NULL,
+                checked_at TEXT NOT NULL,
+                update_available INTEGER NOT NULL DEFAULT 0,
+                severity TEXT NOT NULL DEFAULT 'feature',
+                status TEXT NOT NULL DEFAULT 'unknown',
+                published_at TEXT,
+                release_type TEXT,
+                raw_release_title TEXT
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_passbolt_update_checks_checked_at ON passbolt_update_checks(checked_at)")
         _ensure_import_batches_columns(conn)
 
 
@@ -593,3 +611,53 @@ def get_logs_summary(batch_uuid: str | None = None, scope: str | None = None, le
         "by_scope": {row["scope"]: row["c"] for row in by_scope_rows},
         "last_log": _row_to_dict(last_log),
     }
+
+
+def save_passbolt_update_check(
+    *,
+    local_version: str | None,
+    remote_version: str | None,
+    source_checked: str,
+    update_available: bool,
+    severity: str,
+    status: str,
+    published_at: str | None = None,
+    release_type: str | None = None,
+    raw_release_title: str | None = None,
+) -> None:
+    with _get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO passbolt_update_checks (
+                local_version, remote_version, source_checked, checked_at, update_available,
+                severity, status, published_at, release_type, raw_release_title
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                local_version,
+                remote_version,
+                source_checked,
+                _utc_now_iso(),
+                1 if update_available else 0,
+                severity,
+                status,
+                published_at,
+                release_type,
+                raw_release_title,
+            ),
+        )
+
+
+def list_passbolt_update_checks(limit: int = 20) -> list[dict[str, Any]]:
+    with _get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM passbolt_update_checks
+            ORDER BY datetime(checked_at) DESC, id DESC
+            LIMIT ?
+            """,
+            (max(1, min(limit, 100)),),
+        ).fetchall()
+    return [dict(row) for row in rows]
