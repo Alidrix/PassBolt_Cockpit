@@ -24,12 +24,14 @@ function releaseTypeLabel(type) {
 
 function renderCurrentStatus(data = {}) {
   const status = statusLabel[data.status] || ['neutral', 'Inconnu'];
+  const statusText = status[1];
   $('updatesStatusCard').innerHTML = `
     <div class="section-header"><h3>Mises à jour Passbolt</h3>${statusChip(status[0], status[1])}</div>
     <div class="grid-kpi">
       <div class="kpi-card"><span class="label">Version installée</span><span class="value">${escapeHtml(data.local_version || '-')}</span></div>
       <div class="kpi-card"><span class="label">Dernière version</span><span class="value">${escapeHtml(data.remote_version || '-')}</span></div>
       <div class="kpi-card"><span class="label">Type</span><span class="value">${escapeHtml(releaseTypeLabel(data.release_type))}</span></div>
+      <div class="kpi-card"><span class="label">Statut</span><span class="value">${escapeHtml(statusText)}</span></div>
       <div class="kpi-card"><span class="label">Date publication</span><span class="value">${escapeHtml(formatDate(data.published_at) || '-')}</span></div>
     </div>
     <p class="muted mt-3">Source: ${escapeHtml(sourceLabel(data.source_checked))} · Dernière vérification: ${escapeHtml(formatDate(data.checked_at) || '-')}</p>
