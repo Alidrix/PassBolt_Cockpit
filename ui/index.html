@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Passbolt Cockpit</title>
+  <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="Navigation principale">
+      <div class="brand-block">
+        <img src="/assets/passbolt.svg" alt="Logo Passbolt" onerror="this.onerror=null;this.src='/assets/favicon.svg';" />
+      </div>
+      <nav class="menu">
+        <a class="menu-item active" href="#" data-view="dashboardView">Dashboard</a>
+        <a class="menu-item" href="#" data-view="importerView">Importer</a>
+        <a class="menu-item" href="#" data-view="deletionsView">Suppressions</a>
+        <a class="menu-item" href="#" data-view="passboltHealthView">Santé API Passbolt</a>
+        <a class="menu-item" href="#" data-view="historyView">Historique</a>
+        <a class="menu-item" href="#" data-view="logsAuditView">Logs & audit</a>
+      </nav>
+    </aside>
+
+    <main class="main-content">
+      <header class="topbar" aria-label="Actions globales">
+        <div class="topbar-controls">
+          <button id="themeToggle" class="icon-btn" type="button" aria-label="Basculer le thème" title="Basculer le thème">🌙</button>
+          <button id="globalRefresh" class="icon-btn" type="button" aria-label="Rafraîchir" title="Rafraîchir">↻</button>
+        </div>
+      </header>
+
+      <section id="dashboardView" class="view-section active-view"></section>
+      <section id="importerView" class="view-section"></section>
+      <section id="deletionsView" class="view-section"></section>
+      <section id="passboltHealthView" class="view-section"></section>
+      <section id="historyView" class="view-section"></section>
+      <section id="logsAuditView" class="view-section"></section>
+    </main>
+  </div>
+
+  <section id="notificationCenter" class="notification-center" aria-live="polite" aria-label="Centre de notifications"></section>
+  <div id="toast" class="toast" role="status" aria-live="polite" aria-hidden="true"></div>
+  <script type="module" src="/js/app.js"></script>
+</body>
+</html>
