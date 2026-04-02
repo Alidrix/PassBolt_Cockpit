@@ -3,36 +3,30 @@ import { $, setToast } from './utils.js';
 import { renderDashboardView, refreshDashboard } from './views/dashboard.js';
 import { renderImporterView } from './views/importer.js';
 import { renderDeletionsView, refreshDeleteConfig } from './views/deletions.js';
-import { renderHistoryView, refreshHistory } from './views/history.js';
 import { renderLogsView, refreshLogs } from './views/logs.js';
 import { renderPassboltHealthView, refreshPassboltHealth } from './views/passbolt-health.js';
+import { renderUpdatesView, refreshUpdatesView } from './views/updates.js';
 import {
   renderJobsBatchView,
   refreshJobsBatchView,
   renderGroupsView,
   refreshGroupsView,
-  renderPendingAssignmentsView,
-  refreshPendingAssignmentsView,
-  renderBlockagesView,
-  refreshBlockagesView,
+  renderAlertsView,
+  refreshAlertsView,
   renderConfigOpsView,
-  refreshConfigOpsView,
-  renderAnomaliesView,
-  refreshAnomaliesView
+  refreshConfigOpsView
 } from './views/ops-pages.js';
 
 const refreshByView = {
   dashboardView: refreshDashboard,
   deletionsView: refreshDeleteConfig,
-  historyView: refreshHistory,
   logsAuditView: refreshLogs,
   passboltHealthView: refreshPassboltHealth,
+  updatesView: refreshUpdatesView,
   jobsBatchView: refreshJobsBatchView,
   groupsView: refreshGroupsView,
-  pendingAssignmentsView: refreshPendingAssignmentsView,
-  blockagesView: refreshBlockagesView,
+  alertsView: refreshAlertsView,
   configOpsView: refreshConfigOpsView,
-  anomaliesView: refreshAnomaliesView
 };
 
 function refreshActiveView() {
@@ -68,12 +62,10 @@ function renderLayout() {
   renderDeletionsView();
   renderJobsBatchView();
   renderGroupsView();
-  renderPendingAssignmentsView();
-  renderBlockagesView();
-  renderAnomaliesView();
-  renderHistoryView();
+  renderAlertsView();
   renderLogsView();
   renderPassboltHealthView();
+  renderUpdatesView();
   renderConfigOpsView();
 }
 
@@ -93,14 +85,12 @@ function init() {
   Promise.all([
     refreshDashboard(),
     refreshDeleteConfig(),
-    refreshHistory(),
     refreshLogs(),
     refreshPassboltHealth(),
+    refreshUpdatesView(),
     refreshJobsBatchView(),
     refreshGroupsView(),
-    refreshPendingAssignmentsView(),
-    refreshBlockagesView(),
-    refreshAnomaliesView(),
+    refreshAlertsView(),
     refreshConfigOpsView()
   ])
     .catch((e) => setToast(e.message, 'error'));
