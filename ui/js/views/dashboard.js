@@ -84,18 +84,20 @@ export function renderDashboardView() {
       <div class="card"><div class="section-header"><h3>Dernier import</h3></div><div id="lastImportBlock"></div></div>
       <div class="card"><div id="alertsBlock"></div></div>
     </div>
+    <div class="card mt-3"><div class="section-header"><h3>Mises à jour Passbolt</h3></div><div id="updatesWidgetBlock"></div></div>
     <div class="card"><div class="section-header"><h3>Activité récente</h3></div><div id="activityBlock"></div></div>
   `;
 }
 
 export async function refreshDashboard() {
   try {
-    const [healthProbe, deleteCfg, dbSummary, batches, logsSummary] = await Promise.all([
+    const [healthProbe, deleteCfg, dbSummary, batches, logsSummary, updates] = await Promise.all([
       fetchProbe('/api/health'),
       apiGet('/api/delete-config-status').catch(() => ({})),
       apiGet('/api/db/summary').catch(() => ({})),
       apiGet('/api/batches').catch(() => ({ items: [] })),
-      apiGet('/api/logs/summary').catch(() => ({}))
+      apiGet('/api/logs/summary').catch(() => ({})),
+      apiGet('/api/passbolt/updates/history?limit=1').catch(() => ({ items: [] }))
     ]);
     const health = healthProbe?.payload || {};
     state.batches = batches?.items || [];
@@ -123,7 +125,7 @@ export async function refreshDashboard() {
         <div><span class="muted">Erreurs</span><strong>${escapeHtml(latest.error_count || 0)}</strong></div>
         <div><span class="muted">Supprimables</span><strong>${escapeHtml(latest.deletable_candidates || dbSummary?.deletable_candidates_count || 0)}</strong></div>
       </div>
-      <div class="action-bar mt-3"><button class="btn btn-secondary" data-target-view="historyView">Détails</button></div>
+      <div class="action-bar mt-3"><button class="btn btn-secondary" data-target-view="jobsBatchView">Détails</button></div>
     ` : emptyState('Aucun import.');
 
     const importUnavailable = normalizeStatus(apiImport?.status || 'unknown').chip === 'unknown';
@@ -134,8 +136,22 @@ export async function refreshDashboard() {
     ].filter(Boolean);
 
     $('alertsBlock').innerHTML = alerts.length
-      ? `${alerts.map((a) => `<p class="dashboard-alert-line">${escapeHtml(a)}</p>`).join('')}<div class="mt-3"><button class="btn btn-secondary" data-target-view="logsAuditView">Voir logs</button></div>`
+      ? `${alerts.map((a) => `<p class="dashboard-alert-line">${escapeHtml(a)}</p>`).join('')}<div class="mt-3"><button class="btn btn-secondary" data-target-view="alertsView">Voir alertes</button></div>`
       : emptyState('Aucune alerte.');
+
+    const lastCheck = (updates.items || [])[0];
+    const updateLine = !lastCheck
+      ? 'Vérification en attente'
+      : ['critical_update'].includes(lastCheck.status)
+        ? 'Mise à jour critique'
+        : ['update_available'].includes(lastCheck.status)
+          ? 'Mise à jour disponible'
+          : 'Passbolt à jour';
+    $('updatesWidgetBlock').innerHTML = `
+      <p><strong>${escapeHtml(updateLine)}</strong></p>
+      <p class="muted">Locale: ${escapeHtml(lastCheck?.local_version || '-')} · Dernière: ${escapeHtml(lastCheck?.remote_version || '-')}</p>
+      <div class="action-bar mt-3"><button class="btn btn-secondary" data-target-view="updatesView">Ouvrir</button></div>
+    `;
 
     $('activityBlock').innerHTML = state.batches.slice(0, 6).map((b) => `
       <div class="dashboard-activity-item">
