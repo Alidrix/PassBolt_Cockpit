@@ -1,5 +1,0 @@
-flask
-docker
-requests
-python-gnupg
-pyotp
