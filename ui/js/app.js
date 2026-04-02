@@ -17,28 +17,63 @@ import {
   refreshConfigOpsView
 } from './views/ops-pages.js';
 
-const refreshByView = {
-  dashboardView: refreshDashboard,
-  deletionsView: refreshDeleteConfig,
-  logsAuditView: refreshLogs,
-  passboltHealthView: refreshPassboltHealth,
-  updatesView: refreshUpdatesView,
-  jobsBatchView: refreshJobsBatchView,
-  groupsView: refreshGroupsView,
-  alertsView: refreshAlertsView,
-  configOpsView: refreshConfigOpsView,
+const viewRegistry = {
+  dashboardView: { render: renderDashboardView, refresh: refreshDashboard },
+  importerView: { render: renderImporterView },
+  groupsView: { render: renderGroupsView, refresh: refreshGroupsView },
+  deletionsView: { render: renderDeletionsView, refresh: refreshDeleteConfig },
+  jobsBatchView: { render: renderJobsBatchView, refresh: refreshJobsBatchView },
+  alertsView: { render: renderAlertsView, refresh: refreshAlertsView },
+  passboltHealthView: { render: renderPassboltHealthView, refresh: refreshPassboltHealth },
+  updatesView: { render: renderUpdatesView, refresh: refreshUpdatesView },
+  logsAuditView: { render: renderLogsView, refresh: refreshLogs },
+  configOpsView: { render: renderConfigOpsView, refresh: refreshConfigOpsView }
 };
 
+function appendViewError(viewId, message) {
+  const section = $(viewId);
+  if (!section) return;
+  section.innerHTML = `
+    <section class="card">
+      <div class="section-header"><h3>Erreur de vue</h3></div>
+      <p class="muted">La vue <strong>${viewId}</strong> n'a pas pu être chargée.</p>
+      <pre class="console">${String(message || 'Erreur inconnue')}</pre>
+    </section>
+  `;
+}
+
 function refreshActiveView() {
-  const runner = refreshByView[state.view];
+  const runner = viewRegistry[state.view]?.refresh;
   return runner ? runner() : Promise.resolve();
 }
 
 function switchView(viewId) {
+  console.info(`view switch -> ${viewId}`);
+  if (!viewRegistry[viewId]) {
+    const message = `Navigation impossible: la vue '${viewId}' est absente du registre.`;
+    console.error(message);
+    setToast(message, 'error');
+    return;
+  }
+
+  const section = $(viewId);
+  if (!section) {
+    const message = `Navigation impossible: section DOM #${viewId} introuvable.`;
+    console.error(message);
+    setToast(message, 'error');
+    return;
+  }
+
   state.view = viewId;
   document.querySelectorAll('.menu-item').forEach((a) => a.classList.toggle('active', a.dataset.view === viewId));
   document.querySelectorAll('.view-section').forEach((v) => v.classList.toggle('active-view', v.id === viewId));
-  refreshByView[viewId]?.();
+
+  refreshByView[viewId]?.().catch((error) => {
+    const message = `Refresh '${viewId}' en échec: ${error.message}`;
+    console.error(message, error);
+    appendViewError(viewId, message);
+    setToast(message, 'error');
+  });
 }
 
 function initThemeToggle() {
@@ -56,21 +91,54 @@ function initThemeToggle() {
   });
 }
 
+const refreshByView = Object.fromEntries(
+  Object.entries(viewRegistry)
+    .filter(([, cfg]) => typeof cfg.refresh === 'function')
+    .map(([viewId, cfg]) => [viewId, cfg.refresh])
+);
+
+function validateNavigationWiring() {
+  const menuItems = [...document.querySelectorAll('.menu-item')];
+  menuItems.forEach((item) => {
+    const viewId = item.dataset.view;
+    if (!viewId) {
+      console.error('Menu item sans data-view détecté.', item);
+      return;
+    }
+    if (!viewRegistry[viewId]) {
+      console.error(`Menu item invalide: '${viewId}' absent du registre.`);
+      return;
+    }
+    if (!$(viewId)) {
+      console.error(`Menu item invalide: section DOM manquante pour '${viewId}'.`);
+    }
+  });
+
+  Object.keys(viewRegistry).forEach((viewId) => {
+    if (!$(viewId)) {
+      console.error(`Vue enregistrée sans section DOM: '${viewId}'.`);
+    }
+  });
+}
+
 function renderLayout() {
-  renderDashboardView();
-  renderImporterView();
-  renderDeletionsView();
-  renderJobsBatchView();
-  renderGroupsView();
-  renderAlertsView();
-  renderLogsView();
-  renderPassboltHealthView();
-  renderUpdatesView();
-  renderConfigOpsView();
+  console.info('renderLayout started');
+  Object.entries(viewRegistry).forEach(([viewId, cfg]) => {
+    try {
+      cfg.render();
+    } catch (error) {
+      const message = `Render '${viewId}' en échec: ${error.message}`;
+      console.error(message, error);
+      appendViewError(viewId, message);
+      setToast(message, 'error');
+    }
+  });
+  console.info('renderLayout done');
 }
 
 function init() {
   renderLayout();
+  validateNavigationWiring();
   initThemeToggle();
 
   document.querySelectorAll('.menu-item').forEach((item) => item.addEventListener('click', (e) => {
@@ -82,18 +150,14 @@ function init() {
     refreshActiveView().then(() => setToast('Vue actualisée.', 'info')).catch((e) => setToast(e.message, 'error'));
   });
 
-  Promise.all([
-    refreshDashboard(),
-    refreshDeleteConfig(),
-    refreshLogs(),
-    refreshPassboltHealth(),
-    refreshUpdatesView(),
-    refreshJobsBatchView(),
-    refreshGroupsView(),
-    refreshAlertsView(),
-    refreshConfigOpsView()
-  ])
-    .catch((e) => setToast(e.message, 'error'));
+  Promise.allSettled(Object.values(refreshByView).map((runner) => runner()))
+    .then((results) => {
+      results.forEach((result) => {
+        if (result.status === 'rejected') {
+          console.error('Erreur de refresh initial:', result.reason);
+        }
+      });
+    });
 }
 
 init();
