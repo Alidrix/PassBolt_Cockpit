@@ -84,18 +84,20 @@ export function renderDashboardView() {
       <div class="card"><div class="section-header"><h3>Dernier import</h3></div><div id="lastImportBlock"></div></div>
       <div class="card"><div id="alertsBlock"></div></div>
     </div>
+    <div class="card dashboard-updates-widget" id="dashboardUpdatesWidget"></div>
     <div class="card"><div class="section-header"><h3>Activité récente</h3></div><div id="activityBlock"></div></div>
   `;
 }
 
 export async function refreshDashboard() {
   try {
-    const [healthProbe, deleteCfg, dbSummary, batches, logsSummary] = await Promise.all([
+    const [healthProbe, deleteCfg, dbSummary, batches, logsSummary, updatesSummary] = await Promise.all([
       fetchProbe('/api/health'),
       apiGet('/api/delete-config-status').catch(() => ({})),
       apiGet('/api/db/summary').catch(() => ({})),
       apiGet('/api/batches').catch(() => ({ items: [] })),
-      apiGet('/api/logs/summary').catch(() => ({}))
+      apiGet('/api/logs/summary').catch(() => ({})),
+      apiGet('/api/updates').catch(() => ({}))
     ]);
     const health = healthProbe?.payload || {};
     state.batches = batches?.items || [];
@@ -143,6 +145,21 @@ export async function refreshDashboard() {
         <p class="muted text-ellipsis">${formatDate(b.created_at)}</p>
       </div>
     `).join('') || emptyState('Aucune activité.');
+
+    const upToDate = updatesSummary?.update_available === false;
+    const nextVersion = updatesSummary?.remote_version || '-';
+    $('dashboardUpdatesWidget').innerHTML = `
+      <div class="section-header">
+        <h3>Mises à jour Passbolt</h3>
+      </div>
+      <div class="dashboard-updates-widget-row">
+        <div>
+          <p class="muted">${upToDate ? 'Passbolt à jour' : `Nouvelle version disponible : ${escapeHtml(nextVersion)}`}</p>
+          <p class="text-ellipsis">${escapeHtml(updatesSummary?.local_version || '-')} → ${escapeHtml(nextVersion)}</p>
+        </div>
+        <button class="btn btn-secondary" data-target-view="updatesView">Ouvrir</button>
+      </div>
+    `;
 
     document.querySelectorAll('[data-target-view]').forEach((button) => {
       if (button.dataset.navBound) return;

@@ -140,6 +140,28 @@
   font-size: var(--text-table);
 }
 
+.updates-hero {
+  border-color: color-mix(in oklab, var(--info), transparent 58%);
+  background: linear-gradient(145deg, color-mix(in oklab, var(--surface-2), transparent 8%), color-mix(in oklab, var(--info), transparent 92%));
+}
+.updates-top-grid,
+.updates-features-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: var(--space-3); }
+.updates-kpi-card { min-height: 170px; display: grid; gap: .4rem; }
+.updates-main-value { font-size: clamp(1.2rem, 1.14rem + .5vw, 1.7rem); font-weight: 800; letter-spacing: -.015em; }
+.updates-timeline { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: var(--space-2); }
+.updates-release-item { border: 1px solid var(--border); border-radius: var(--radius-sm); background: color-mix(in oklab, var(--surface-2), transparent 8%); padding: var(--space-2); display: grid; gap: .28rem; }
+.updates-release-badge { display: inline-flex; border-radius: var(--radius-pill); border: 1px solid var(--border); font-size: var(--text-2xs); padding: .18rem .5rem; text-transform: uppercase; letter-spacing: .04em; width: fit-content; }
+.updates-release-badge.installed { color: var(--success); border-color: color-mix(in oklab, var(--success), transparent 55%); }
+.updates-release-badge.intermediate { color: var(--info); border-color: color-mix(in oklab, var(--info), transparent 55%); }
+.updates-release-badge.target { color: var(--warning); border-color: color-mix(in oklab, var(--warning), transparent 55%); }
+.updates-release-badge.critical { color: var(--danger); border-color: color-mix(in oklab, var(--danger), transparent 50%); }
+.updates-impact-card { border-color: color-mix(in oklab, var(--warning), transparent 60%); }
+.updates-impact-grid,
+.updates-check-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: var(--space-2); }
+.updates-impact-grid > div,
+.updates-check-grid > div { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: var(--space-2); display: grid; gap: .24rem; background: color-mix(in oklab, var(--surface-2), transparent 8%); }
+.dashboard-updates-widget-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+
 @media (max-width: 1100px) {
   .deletion-target-grid,
   .master-detail,
