@@ -7,6 +7,7 @@ import re
 import shlex
 import time
 import uuid
+from collections import OrderedDict
 from urllib.parse import urljoin
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
@@ -99,6 +100,8 @@ SAFE_GROUP = re.compile(r"^[A-Za-z0-9 _@.\-']+$")
 SAFE_ROLE = {"user", "admin"}
 PENDING_ASSIGNMENTS: list[dict[str, Any]] = []
 PENDING_LOCK = Lock()
+UPDATES_CACHE_TTL = int(os.getenv("UPDATES_CACHE_TTL_SECONDS", "1800"))
+UPDATES_CACHE: dict[str, Any] = {"checked_at": 0.0, "payload": None}
 
 
 def validate_startup_configuration() -> list[str]:
@@ -291,6 +294,215 @@ def diagnose_environment() -> dict[str, Any]:
         diagnostics["recommendations"].append("Erreur pendant l'auto-diagnostic")
 
     return diagnostics
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _parse_semver(version: str) -> tuple[int, int, int]:
+    parts = [int(p) for p in re.findall(r"\d+", (version or "").split("-")[0])]
+    while len(parts) < 3:
+        parts.append(0)
+    return tuple(parts[:3])
+
+
+def _compare_semver(a: str, b: str) -> int:
+    va, vb = _parse_semver(a), _parse_semver(b)
+    return (va > vb) - (va < vb)
+
+
+def _local_passbolt_version() -> dict[str, Any]:
+    detected_at = _utc_now_iso()
+    edition = os.getenv("PASSBOLT_EDITION", "").strip() or "community"
+    env_version = os.getenv("PASSBOLT_LOCAL_VERSION", "").strip()
+    if env_version:
+        return {
+            "local_version": env_version,
+            "local_edition": edition,
+            "local_detected_at": detected_at,
+            "local_source": "env:PASSBOLT_LOCAL_VERSION",
+            "local_status": "ok",
+        }
+
+    if docker_client is not None:
+        try:
+            container = docker_client.containers.get(_detect_container())
+            tags = ((container.image.attrs or {}).get("RepoTags") or [])
+            for tag in tags:
+                match = re.search(r":(?:v)?(\d+\.\d+\.\d+)", str(tag))
+                if match:
+                    return {
+                        "local_version": match.group(1),
+                        "local_edition": edition,
+                        "local_detected_at": detected_at,
+                        "local_source": "docker:image-tag",
+                        "local_status": "ok",
+                    }
+        except Exception:
+            pass
+
+    return {
+        "local_version": "unknown",
+        "local_edition": edition,
+        "local_detected_at": detected_at,
+        "local_source": "unresolved",
+        "local_status": "degraded",
+    }
+
+
+def _fetch_github_releases() -> list[dict[str, Any]]:
+    response = requests.get(
+        "https://api.github.com/repos/passbolt/passbolt_api/releases",
+        timeout=12,
+        headers={"Accept": "application/vnd.github+json"},
+    )
+    response.raise_for_status()
+    items = response.json() if isinstance(response.json(), list) else []
+    releases: list[dict[str, Any]] = []
+    for item in items:
+        if item.get("draft"):
+            continue
+        version = re.sub(r"^[^0-9]*", "", str(item.get("tag_name") or ""))
+        if not re.match(r"^\d+\.\d+\.\d+", version):
+            continue
+        releases.append(
+            {
+                "version": version,
+                "published_at": item.get("published_at"),
+                "notes": item.get("body") or "",
+                "source": "GitHub Releases passbolt/passbolt_api",
+            }
+        )
+    releases.sort(key=lambda item: _parse_semver(str(item.get("version") or "0.0.0")))
+    return releases
+
+
+def _fetch_passbolt_changelog_latest() -> dict[str, Any]:
+    response = requests.get("https://www.passbolt.com/changelog", timeout=12)
+    response.raise_for_status()
+    body = response.text
+    match = re.search(r"Passbolt[^<]{0,35}?(\d+\.\d+\.\d+)", body, re.IGNORECASE)
+    if not match:
+        return {}
+    return {"version": match.group(1), "source": "Changelog officiel Passbolt"}
+
+
+def _aggregate_features(notes: str) -> dict[str, list[str]]:
+    buckets: OrderedDict[str, list[str]] = OrderedDict(
+        [
+            ("user", []),
+            ("admin", []),
+            ("security_performance", []),
+            ("operations", []),
+        ]
+    )
+    for raw in (notes or "").splitlines():
+        line = raw.strip().lstrip("-* ").strip()
+        if not line:
+            continue
+        lowered = line.lower()
+        target = "operations"
+        if any(token in lowered for token in ("ui", "user", "workspace", "share", "browser")):
+            target = "user"
+        elif any(token in lowered for token in ("admin", "mfa", "group", "permission", "policy")):
+            target = "admin"
+        elif any(token in lowered for token in ("security", "vulnerability", "patch", "cve", "perf", "performance")):
+            target = "security_performance"
+        if len(buckets[target]) < 6:
+            buckets[target].append(line)
+    return dict(buckets)
+
+
+def compute_updates_payload(force: bool = False) -> dict[str, Any]:
+    now = time.time()
+    if not force and UPDATES_CACHE.get("payload") and now - float(UPDATES_CACHE.get("checked_at") or 0.0) < UPDATES_CACHE_TTL:
+        return dict(UPDATES_CACHE["payload"])
+
+    local = _local_passbolt_version()
+    check_error = ""
+    check_status = "success"
+    source_used = "GitHub Releases passbolt/passbolt_api"
+    releases: list[dict[str, Any]] = []
+
+    try:
+        releases = _fetch_github_releases()
+    except Exception as error:
+        check_status = "degraded"
+        check_error = f"GitHub Releases indisponible: {error}"
+
+    changelog_hint: dict[str, Any] = {}
+    try:
+        changelog_hint = _fetch_passbolt_changelog_latest()
+    except Exception as error:
+        check_status = "degraded" if check_status == "success" else check_status
+        check_error = f"{check_error} | Changelog indisponible: {error}".strip(" |")
+
+    remote = releases[-1] if releases else {"version": changelog_hint.get("version", "unknown"), "published_at": None, "notes": "", "source": changelog_hint.get("source", "none")}
+    if changelog_hint.get("version") and _compare_semver(changelog_hint["version"], remote.get("version", "0.0.0")) > 0:
+        remote = {**remote, "version": changelog_hint["version"], "source": changelog_hint.get("source", "Changelog officiel Passbolt")}
+        source_used = remote["source"]
+
+    local_version = local.get("local_version", "unknown")
+    remote_version = str(remote.get("version") or "unknown")
+    update_available = local_version != "unknown" and remote_version != "unknown" and _compare_semver(local_version, remote_version) < 0
+
+    gap_label = "À jour"
+    if update_available:
+        lv, rv = _parse_semver(local_version), _parse_semver(remote_version)
+        major_delta = rv[0] - lv[0]
+        minor_delta = rv[1] - lv[1]
+        if major_delta > 0:
+            gap_label = "Mise à jour majeure disponible"
+        elif minor_delta <= 1:
+            gap_label = "1 version de retard"
+        else:
+            gap_label = f"{minor_delta} versions de retard"
+
+    intermediate = [
+        item for item in releases
+        if local_version != "unknown" and remote_version != "unknown" and _compare_semver(local_version, item.get("version", "")) < 0 and _compare_semver(item.get("version", ""), remote_version) <= 0
+    ]
+    feature_pool = {"user": [], "admin": [], "security_performance": [], "operations": []}
+    for item in intermediate:
+        categorized = _aggregate_features(str(item.get("notes") or ""))
+        for key in feature_pool:
+            for line in categorized.get(key, []):
+                if line not in feature_pool[key] and len(feature_pool[key]) < 8:
+                    feature_pool[key].append(line)
+
+    operational_impact = {
+        "backup_recommended": bool(update_available),
+        "migration_potential": "oui" if "major" in gap_label.lower() else "possible",
+        "clear_cache_recommended": bool(update_available),
+        "healthcheck_post_update": bool(update_available),
+        "risk_level": "élevé" if "majeure" in gap_label.lower() else ("modéré" if update_available else "faible"),
+    }
+    checked_at = _utc_now_iso()
+    payload = {
+        **local,
+        "remote_version": remote_version,
+        "remote_published_at": remote.get("published_at"),
+        "source_used": source_used,
+        "update_available": update_available,
+        "version_gap": gap_label,
+        "intermediate_releases": [
+            {
+                "version": item.get("version"),
+                "published_at": item.get("published_at"),
+                "critical": _parse_semver(str(item.get("version") or "0.0.0"))[0] > _parse_semver(local_version)[0],
+            }
+            for item in intermediate
+        ],
+        "aggregated_features": feature_pool,
+        "operational_impact": operational_impact,
+        "checked_at": checked_at,
+        "check_status": check_status,
+        "check_error": check_error or None,
+    }
+    UPDATES_CACHE["checked_at"] = now
+    UPDATES_CACHE["payload"] = payload
+    return dict(payload)
 
 
 def _run_shell_command(container_name: str, cli_path: str, shell_command: str) -> dict[str, Any]:
@@ -2631,6 +2843,29 @@ def _json_error(message: str, status: int = 500, **extra: Any) -> Any:
     if extra:
         payload.update(extra)
     return jsonify(payload), status
+
+
+@app.route("/updates", methods=["GET"])
+@app.route("/api/updates", methods=["GET"])
+def updates_status() -> Any:
+    force = _coerce_bool(request.args.get("force"), False)
+    try:
+        return jsonify(compute_updates_payload(force=force))
+    except Exception as error:
+        return _json_error("Unable to compute updates status", 500, details=str(error))
+
+
+@app.route("/updates/check", methods=["POST"])
+@app.route("/api/updates/check", methods=["POST"])
+def updates_check() -> Any:
+    body = request.get_json(silent=True) or {}
+    force = _coerce_bool(body.get("force"), True)
+    try:
+        payload = compute_updates_payload(force=force)
+        payload["cache_ttl_seconds"] = UPDATES_CACHE_TTL
+        return jsonify(payload)
+    except Exception as error:
+        return _json_error("Unable to refresh updates status", 500, details=str(error))
 
 
 @app.route("/logs", methods=["GET", "DELETE"])
