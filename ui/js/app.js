@@ -6,9 +6,11 @@ import { renderDeletionsView, refreshDeleteConfig } from './views/deletions.js';
 import { renderHistoryView, refreshHistory } from './views/history.js';
 import { renderLogsView, refreshLogs } from './views/logs.js';
 import { renderPassboltHealthView, refreshPassboltHealth } from './views/passbolt-health.js';
+import { renderUpdatesView, refreshUpdates } from './views/updates.js';
 
 const refreshByView = {
   dashboardView: refreshDashboard,
+  updatesView: refreshUpdates,
   deletionsView: refreshDeleteConfig,
   historyView: refreshHistory,
   logsAuditView: refreshLogs,
@@ -21,6 +23,7 @@ function refreshActiveView() {
 }
 
 function switchView(viewId) {
+  console.info(`[UI] switchView -> ${viewId}`);
   state.view = viewId;
   document.querySelectorAll('.menu-item').forEach((a) => a.classList.toggle('active', a.dataset.view === viewId));
   document.querySelectorAll('.view-section').forEach((v) => v.classList.toggle('active-view', v.id === viewId));
@@ -44,6 +47,7 @@ function initThemeToggle() {
 
 function renderLayout() {
   renderDashboardView();
+  renderUpdatesView();
   renderImporterView();
   renderDeletionsView();
   renderHistoryView();
@@ -61,10 +65,11 @@ function init() {
   }));
 
   $('globalRefresh')?.addEventListener('click', () => {
+    console.info(`[UI] refreshView -> ${state.view}`);
     refreshActiveView().then(() => setToast('Vue actualisée.', 'info')).catch((e) => setToast(e.message, 'error'));
   });
 
-  Promise.all([refreshDashboard(), refreshDeleteConfig(), refreshHistory(), refreshLogs(), refreshPassboltHealth()])
+  Promise.all([refreshDashboard(), refreshUpdates(), refreshDeleteConfig(), refreshHistory(), refreshLogs(), refreshPassboltHealth()])
     .catch((e) => setToast(e.message, 'error'));
 }
 
