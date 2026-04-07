@@ -25,12 +25,34 @@ function asList(items) {
   return items.map((item) => `<li>${escapeHtml(item)}</li>`).join('');
 }
 
+function fallbackBody(message) {
+  return `
+    <section class="card updates-hero">
+      <p class="page-label">Mises à jour</p>
+      <h2>Mises à jour Passbolt</h2>
+      <p class="muted">${escapeHtml(message)}</p>
+    </section>
+    <section class="card">
+      ${emptyState('Impossible de récupérer les informations de mise à jour pour le moment. Réessayez dans quelques minutes.')}
+    </section>
+  `;
+}
+
+async function runRefreshCheck() {
+  await apiPost('/api/updates/check', JSON.stringify({ force: true }), { headers: { 'Content-Type': 'application/json' } });
+  await refreshUpdates();
+  setToast('Vérification des mises à jour terminée.', 'success');
+}
+
 function renderUpdatePayload(payload) {
   const timeline = payload?.intermediate_releases || [];
   const features = payload?.aggregated_features || {};
   const impact = payload?.operational_impact || {};
 
-  $('updatesViewBody').innerHTML = `
+  const viewBody = $('updatesViewBody');
+  if (!viewBody) return;
+
+  viewBody.innerHTML = `
     <section class="card updates-hero">
       <p class="page-label">Mises à jour</p>
       <h2>Mises à jour Passbolt</h2>
@@ -52,10 +74,19 @@ function renderUpdatePayload(payload) {
         <p class="muted">Source retenue: ${escapeHtml(payload?.source_used || '-')}</p>
       </article>
       <article class="card updates-kpi-card">
-        <h3>Statut global</h3>
+        <h3>Statut</h3>
         <div>${gapChip(payload?.version_gap, payload?.update_available)}</div>
         <p class="muted">${escapeHtml(payload?.version_gap || 'Statut indisponible')}</p>
       </article>
+    </section>
+
+    <section class="card">
+      <div class="section-header"><h3>Ce que vous gagnez</h3></div>
+      <div class="updates-features-grid">
+        <article><h4>Nouveautés utilisateur</h4><ul>${asList(features?.user)}</ul></article>
+        <article><h4>Nouveautés admin</h4><ul>${asList(features?.admin)}</ul></article>
+        <article><h4>Sécurité & performance</h4><ul>${asList(features?.security_performance)}</ul></article>
+      </div>
     </section>
 
     <section class="card">
@@ -78,12 +109,6 @@ function renderUpdatePayload(payload) {
           <span class="muted">${formatDate(payload?.remote_published_at)}</span>
         </div>
       </div>
-    </section>
-
-    <section class="updates-features-grid">
-      <article class="card"><h3>Nouveautés utilisateur</h3><ul>${asList(features?.user)}</ul></article>
-      <article class="card"><h3>Nouveautés admin</h3><ul>${asList(features?.admin)}</ul></article>
-      <article class="card"><h3>Sécurité & performance</h3><ul>${asList(features?.security_performance)}</ul></article>
     </section>
 
     <section class="card updates-impact-card">
@@ -113,9 +138,7 @@ function renderUpdatePayload(payload) {
 
   $('updatesRefreshNow')?.addEventListener('click', async () => {
     try {
-      await apiPost('/api/updates/check', JSON.stringify({ force: true }), { headers: { 'Content-Type': 'application/json' } });
-      await refreshUpdates();
-      setToast('Vérification des mises à jour terminée.', 'success');
+      await runRefreshCheck();
     } catch (error) {
       console.error('[UI] updatesView remote source error', error);
       setToast(`Échec de vérification: ${error.message}`, 'error');
@@ -124,15 +147,63 @@ function renderUpdatePayload(payload) {
 }
 
 export function renderUpdatesView() {
-  $('updatesView').innerHTML = '<div id="updatesViewBody"></div>';
+  console.info('renderUpdatesView started');
+  const root = $('updatesView');
+  if (!root) return;
+
+  root.innerHTML = `
+    <div class="updates-view-shell">
+      <section class="card updates-hero">
+        <p class="page-label">Mises à jour</p>
+        <h2>Mises à jour Passbolt</h2>
+        <p class="muted">Chargement des informations de version…</p>
+      </section>
+      <section class="updates-top-grid">
+        <article class="card updates-kpi-card"><h3>Version installée</h3><p class="updates-main-value">-</p></article>
+        <article class="card updates-kpi-card"><h3>Dernière version disponible</h3><p class="updates-main-value">-</p></article>
+        <article class="card updates-kpi-card"><h3>Statut</h3><p class="updates-main-value">-</p></article>
+      </section>
+      <section class="card updates-check-card">
+        <div class="section-header">
+          <h3>Actions</h3>
+          <button id="updatesRefreshNowInitial" class="btn btn-primary" type="button">Vérifier maintenant</button>
+        </div>
+      </section>
+      <div id="updatesViewBody"></div>
+    </div>
+  `;
+
+  $('updatesRefreshNowInitial')?.addEventListener('click', async () => {
+    try {
+      await runRefreshCheck();
+    } catch (error) {
+      console.error('[UI] updatesView refresh button failed', error);
+      setToast(`Échec de vérification: ${error.message}`, 'error');
+    }
+  });
 }
 
 export async function refreshUpdates() {
+  console.info('refreshUpdates started');
+  const viewBody = $('updatesViewBody');
+  if (!viewBody) {
+    console.warn('[UI] updatesViewBody not found, rendering fallback shell');
+    renderUpdatesView();
+  }
+
   try {
     const payload = await apiGet('/api/updates');
+    if (!payload || Object.keys(payload).length === 0) throw new Error('Réponse vide de /api/updates');
     renderUpdatePayload(payload);
+    console.info('refreshUpdates success');
   } catch (error) {
-    console.error('[UI] updatesView remote source error', error);
-    $('updatesViewBody').innerHTML = emptyState(`Impossible de charger les mises à jour: ${error.message}`);
+    console.error('refreshUpdates failed', error);
+    const target = $('updatesViewBody');
+    if (target) {
+      target.innerHTML = fallbackBody(`Impossible de charger les mises à jour: ${error.message}`);
+    }
+    setToast(`Mises à jour indisponibles: ${error.message}`, 'error');
   }
 }
+
+export const refreshUpdatesView = refreshUpdates;
