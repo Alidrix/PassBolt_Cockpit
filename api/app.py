@@ -388,6 +388,10 @@ def _fetch_passbolt_changelog_latest() -> dict[str, Any]:
     return {"version": match.group(1), "source": "Changelog officiel Passbolt"}
 
 
+class RemoteUpdatesUnavailableError(RuntimeError):
+    """Raised when every remote updates source is unavailable."""
+
+
 def _aggregate_features(notes: str) -> dict[str, list[str]]:
     buckets: OrderedDict[str, list[str]] = OrderedDict(
         [
@@ -414,7 +418,7 @@ def _aggregate_features(notes: str) -> dict[str, list[str]]:
     return dict(buckets)
 
 
-def compute_updates_payload(force: bool = False) -> dict[str, Any]:
+def compute_updates_payload(force: bool = False, raise_on_remote_unavailable: bool = False) -> dict[str, Any]:
     now = time.time()
     if not force and UPDATES_CACHE.get("payload") and now - float(UPDATES_CACHE.get("checked_at") or 0.0) < UPDATES_CACHE_TTL:
         return dict(UPDATES_CACHE["payload"])
@@ -422,11 +426,12 @@ def compute_updates_payload(force: bool = False) -> dict[str, Any]:
     local = _local_passbolt_version()
     check_error = ""
     check_status = "success"
-    source_used = "GitHub Releases passbolt/passbolt_api"
+    source_used = "none"
     releases: list[dict[str, Any]] = []
 
     try:
         releases = _fetch_github_releases()
+        source_used = "GitHub Releases passbolt/passbolt_api"
     except Exception as error:
         check_status = "degraded"
         check_error = f"GitHub Releases indisponible: {error}"
@@ -439,9 +444,18 @@ def compute_updates_payload(force: bool = False) -> dict[str, Any]:
         check_error = f"{check_error} | Changelog indisponible: {error}".strip(" |")
 
     remote = releases[-1] if releases else {"version": changelog_hint.get("version", "unknown"), "published_at": None, "notes": "", "source": changelog_hint.get("source", "none")}
+    if remote.get("source") and remote.get("source") != "none":
+        source_used = str(remote.get("source"))
     if changelog_hint.get("version") and _compare_semver(changelog_hint["version"], remote.get("version", "0.0.0")) > 0:
         remote = {**remote, "version": changelog_hint["version"], "source": changelog_hint.get("source", "Changelog officiel Passbolt")}
-        source_used = remote["source"]
+        source_used = str(remote["source"])
+
+    remote_available = bool(releases) or bool(changelog_hint.get("version"))
+    if not remote_available:
+        source_used = "none"
+        check_status = "degraded"
+        if not check_error:
+            check_error = "Aucune source distante disponible."
 
     local_version = local.get("local_version", "unknown")
     remote_version = str(remote.get("version") or "unknown")
@@ -500,6 +514,8 @@ def compute_updates_payload(force: bool = False) -> dict[str, Any]:
         "check_status": check_status,
         "check_error": check_error or None,
     }
+    if raise_on_remote_unavailable and not remote_available:
+        raise RemoteUpdatesUnavailableError(str(payload.get("check_error") or "Aucune source distante disponible."))
     UPDATES_CACHE["checked_at"] = now
     UPDATES_CACHE["payload"] = payload
     return dict(payload)
@@ -2861,9 +2877,32 @@ def updates_check() -> Any:
     body = request.get_json(silent=True) or {}
     force = _coerce_bool(body.get("force"), True)
     try:
-        payload = compute_updates_payload(force=force)
-        payload["cache_ttl_seconds"] = UPDATES_CACHE_TTL
-        return jsonify(payload)
+        payload = compute_updates_payload(force=force, raise_on_remote_unavailable=True)
+        return jsonify(
+            {
+                "success": True,
+                "checked_at": payload.get("checked_at"),
+                "remote_version": payload.get("remote_version"),
+                "source_used": payload.get("source_used"),
+                "check_status": payload.get("check_status"),
+                "check_error": None,
+            }
+        )
+    except RemoteUpdatesUnavailableError as error:
+        fallback_payload = compute_updates_payload(force=True, raise_on_remote_unavailable=False)
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "checked_at": fallback_payload.get("checked_at"),
+                    "remote_version": fallback_payload.get("remote_version"),
+                    "source_used": fallback_payload.get("source_used"),
+                    "check_status": "degraded",
+                    "check_error": str(error),
+                }
+            ),
+            503,
+        )
     except Exception as error:
         return _json_error("Unable to refresh updates status", 500, details=str(error))
 
