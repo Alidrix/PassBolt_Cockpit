@@ -445,18 +445,3 @@ docker compose logs --tail=300 importer-api
 
 - Repository : **Alidrix/PassBolt_Cockpit**
 - Licence : voir `LICENSE` (MIT).
-
-## 🚀 Production avec Traefik + Cloudflare
-
-La production officielle utilise Traefik v3 + Cloudflare (DNS/Proxy/WAF) avec SSL/TLS Full (strict).
-Nginx n’est plus le reverse proxy production officiel.
-
-```bash
-cp .env.production.example .env.production
-nano .env.production
-chmod +x scripts/prod-*.sh
-./scripts/prod-up.sh
-./scripts/prod-check.sh
-```
-
-> Ne jamais exposer PostgreSQL, Redis, NATS ou ClickHouse publiquement. Seul Traefik expose 80/443.
