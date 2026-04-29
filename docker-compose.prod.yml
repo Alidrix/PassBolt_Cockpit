@@ -1,0 +1,66 @@
+services:
+  traefik:
+    image: traefik:v3.4
+    container_name: trend-scope-traefik
+    restart: unless-stopped
+    env_file: .env.production
+    command:
+      - "--configFile=/etc/traefik/traefik.yml"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - "./infra/traefik/traefik.yml:/etc/traefik/traefik.yml:ro"
+      - "./infra/traefik/traefik.staging.yml:/etc/traefik/traefik.staging.yml:ro"
+      - "./infra/traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro"
+      - "./infra/traefik/acme:/letsencrypt"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.traefik.rule=Host(`${TRAEFIK_DOMAIN}`)"
+      - "traefik.http.routers.traefik.entrypoints=websecure"
+      - "traefik.http.routers.traefik.tls=true"
+      - "traefik.http.routers.traefik.tls.certresolver=cloudflare"
+      - "traefik.http.routers.traefik.service=api@internal"
+      - "traefik.http.routers.traefik.middlewares=security-headers@file,dashboard-auth@file"
+    networks:
+      - trend-scope-public
+      - trend-scope-private
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    expose:
+      - "5173"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.frontend.rule=Host(`${APP_DOMAIN}`) || Host(`${APP_WWW_DOMAIN}`)"
+      - "traefik.http.routers.frontend.entrypoints=websecure"
+      - "traefik.http.routers.frontend.tls=true"
+      - "traefik.http.routers.frontend.tls.certresolver=cloudflare"
+      - "traefik.http.routers.frontend.middlewares=security-headers@file,gzip@file"
+      - "traefik.http.services.frontend.loadbalancer.server.port=5173"
+    networks:
+      - trend-scope-private
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    env_file: .env.production
+    expose:
+      - "4443"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.backend.rule=Host(`${API_DOMAIN}`)"
+      - "traefik.http.routers.backend.entrypoints=websecure"
+      - "traefik.http.routers.backend.tls=true"
+      - "traefik.http.routers.backend.tls.certresolver=cloudflare"
+      - "traefik.http.routers.backend.middlewares=security-headers@file,gzip@file,api-rate-limit@file"
+      - "traefik.http.services.backend.loadbalancer.server.port=4443"
+    networks:
+      - trend-scope-private
+
+networks:
+  trend-scope-public:
+  trend-scope-private:
+    internal: true
